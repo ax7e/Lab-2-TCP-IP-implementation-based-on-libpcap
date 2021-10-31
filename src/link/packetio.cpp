@@ -11,7 +11,6 @@ int setFrameReceiveCallback(int id, frameReceiveCallback callback) {
 int sendFrame(const void* buf, int len, int ethtype, const void *dstmac, int id) {
     struct ether_header *header_ethernet;
 	u_char *new_packet;
-	size_t i;
 
 	new_packet = (u_char*)malloc(sizeof(u_char) * len);
 	memcpy(new_packet, buf, len);
