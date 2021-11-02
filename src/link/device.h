@@ -5,12 +5,18 @@
 #include <thread>
 #include <pcap/pcap.h>
 #include <vector>
+#include <future>
 using std::vector;
 using std::string;
+
+typedef u_char mac_t[6];
+typedef u_char ip_t[4];
+
 /**
 * @file device.h
 * @brief Library supporting network device management.
 */
+
 /**
 * Add a device to the library for sending/receiving packets.
 *
@@ -26,7 +32,15 @@ int addDevice(string device);
 * was found.
 */
 int displayDevice();
-std::thread activateListen(int id, int);
+vector<string> getLegalPortName(); 
+/**
+ * @brief Activate listen on given devices. 
+ * 
+ * @param cnt Number of messages to process, 0 means infinity
+ * @return A thread which does the listen job. The thread returns -1 on failure. 
+ *
+*/
+std::future<int> activateListen(string id, int);
 /**
 * @brief Process a frame upon receiving it.
 *
@@ -37,10 +51,13 @@ std::thread activateListen(int id, int);
 * @return -1 on success , -1 on error.
 * @see addDevice
 */
-typedef int (* frameReceiveCallback)(const void*, int , int);
+typedef int (* frameReceiveCallback)(const void*, int , string);
 struct Info {
     pcap_t *handle; 
     frameReceiveCallback callback; 
     u_char mac[6];
 };
-vector<Info>& getIDCache();
+
+std::map<string, Info>& getIDCache();
+
+int getMACAddress(const char *name, u_char *dst);

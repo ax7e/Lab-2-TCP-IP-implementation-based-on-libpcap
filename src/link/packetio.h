@@ -1,4 +1,6 @@
 #pragma once
+
+#define DEFALUT_ETH_TYPE 0x80
 /**
 * @file packetio.h
 * @brief Library supporting sending/receiving Ethernet II frames.
@@ -17,7 +19,7 @@
 * @see addDevice
 */
 int sendFrame(const void* buf , int len ,
-int ethtype , const void* destmac , int id);
+int ethtype , const void* destmac , const string &id);
 
 /**
 * @brief Register a callback function to be called each time an
@@ -27,4 +29,4 @@ int ethtype , const void* destmac , int id);
 * @return 0 on success , -1 on error.
 * @see frameReceiveCallback
 */
-int setFrameReceiveCallback(int id, frameReceiveCallback callback);
+int setFrameReceiveCallback(string id, frameReceiveCallback callback);

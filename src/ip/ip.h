@@ -1,0 +1,67 @@
+/**
+* @file ip.h
+* @brief Library supporting sending / receiving IP packets encapsulated
+in an Ethernet II frame .
+*/
+#include <netinet/ip.h>
+#include <cstring>
+#include "src/link/link.h"
+#include "ip_route.h"
+#define IP_HEADER_LEN 20
+
+/**
+* @brief Send an IP packet to specified host .
+*
+* @param src Source IP address .
+* @param dest Destination IP address .
+* @param proto Value of ‘protocol ‘ field in IP header .
+* @param buf pointer to IP payload
+* @param len Length of IP payload
+* @return 0 on success , -1 on error .
+*/
+int sendIPPacket(const struct in_addr src, const struct in_addr dest,
+                 int proto, const void *buf, int len);
+/**
+* @brief Process an IP packet upon receiving it.
+*
+* @param buf Pointer to the packet .
+* @param len Length of the packet .
+* @return 0 on success , -1 on error .
+* @see addDevice
+*/
+typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
+/**
+* @brief Register a callback function to be called each time an IP
+packet was received .
+*
+* @param callback The callback function .
+* @return 0 on success , -1 on error .
+* @see IPPacketReceiveCallback
+*/
+int setIPPacketReceiveCallback(IPPacketReceiveCallback callback);
+/**
+ * Get IP address of the device name 
+ * 
+ * @param dst Location to store the result
+ * @param name port name of
+ * @return 0 on success, otherwise failure
+ */
+int getIPAddress(const char *name, u_char *dst);
+
+const uint32_t sToIP(string s) ;
+
+struct ip_header_t {
+    uint8_t  ver_ihl; 
+    uint8_t  tos;
+    uint16_t total_length;
+    uint16_t id;
+    uint16_t flags_fo; // 3 bits flags and 13 bits fragment-offset
+    uint8_t  ttl;
+    uint8_t  protocol;
+    uint16_t checksum;
+    in_addr   src_addr;
+    in_addr   dst_addr;
+
+    uint8_t ihl() const { return ver_ihl &0x0F; }
+    size_t size() const { return ihl() * 4; }
+  };

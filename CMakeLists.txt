@@ -18,9 +18,16 @@ set(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -lpcap -lpthread -O2 -Wall -Wno-sign
 include_directories(PUBLIC "${PROJECT_SOURCE_DIR}")
 
 add_library(link_lib
+  src/link/link.h
   src/link/device.cpp
   src/link/packetio.cpp
 )
 target_link_libraries(link_lib PUBLIC  ${PCAP_LIBRARY} Threads::Threads)
+
+add_library(ip_lib
+  src/ip/ip.cpp
+  src/ip/ip_route.cpp
+  )
+target_link_libraries(ip_lib PUBLIC  ${PCAP_LIBRARY} Threads::Threads link_lib)
 
 add_subdirectory(src/testbench)

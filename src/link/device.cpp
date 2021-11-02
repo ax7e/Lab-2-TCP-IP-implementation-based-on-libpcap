@@ -2,43 +2,38 @@
 #include "packetio.h"
 #include <pcap/pcap.h>
 #include <map>
-#include <cstring>
 #include <vector>
 #include <thread>
+#include <future>
+#include <cstring>
 using std::map; 
 using std::thread;
 using std::vector; 
 
-vector<Info>& getIDCache() {
-    static vector<Info> v; 
+#define MAC_ADDRESS 17
+
+map<string, Info>& getIDCache() {
+    static map<string, Info> v; 
     return v; 
 }
 
-char *get_ip_str(const struct sockaddr *sa, char *s, size_t maxlen)
+int get_ip_str(const struct sockaddr *sa, char *s, size_t maxlen)
 {
     switch(sa->sa_family) {
         case AF_INET:
-            inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr),
-                    s, maxlen);
-            break;
-
+            memcpy(s, &((struct sockaddr_in*)sa)->sin_addr, 4);
+            return AF_INET; 
         case AF_INET6:
-            inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)sa)->sin6_addr),
-                    s, maxlen);
-            break;
-
-        case 17:
-            for (int i = 10; i < 16; ++i) {
-                sprintf(s+(i-10)*3, "%.2x", (u_char)sa->sa_data[i]);
-                if (i!=15) sprintf(s+(i-10)*3+2, ":");
-            }
-            break;
+            memcpy(s, &((struct sockaddr_in6 *)sa)->sin6_addr, 16);
+            return AF_INET6; 
+        case MAC_ADDRESS:
+            memcpy(s, sa->sa_data+10, 6);
+            return MAC_ADDRESS;
         default:
             printf("%d\n", sa->sa_family);
             strncpy(s, "Unknown AF", maxlen);
-            return NULL;
+            return -1;
     }
-    return s;
 }
 
 int displayDevice() {
@@ -62,8 +57,26 @@ int displayDevice() {
             char buf[100];
             for (auto k = i->addresses; k != NULL; k = k->next)
             {
-                get_ip_str(k->addr, buf, 100); 
-                printf("Addr:%20s\n",buf);
+                int type = get_ip_str(k->addr, buf, 100); 
+                switch(type) {
+                    case AF_INET:
+                        printf("IPV4: ");
+                        for (int j = 0;j < 4; ++j) printf("%d%c", buf[j], ".\n"[j==3]);
+                        break;
+                    case AF_INET6:
+                        printf("IPV6: ");
+                        for (int j = 0;j < 16; ++j) printf("%02x", (unsigned char) buf[j]);
+                        puts(""); 
+                        break;
+                    case MAC_ADDRESS:
+                        printf("MAC: ");
+                        for (int j = 0;j < 6; ++j) printf("%02x:", (unsigned char)buf[j]);
+                        puts(""); 
+                        break;
+                    default:
+                        printf("Unknown Address.\n");
+
+                }
             }
         }
     }
@@ -71,8 +84,34 @@ int displayDevice() {
     return 0; 
 }
 
-int getMACAddr(const char *name, u_char *dst) {
-    printf("name = %s\n", name); 
+vector<string> getLegalPortName() {
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_if_t *alldevsp;
+    vector<string> res;
+    if (pcap_findalldevs(&alldevsp, errbuf) == PCAP_ERROR) {
+        printf("[Error] %s\n", errbuf);
+        return res;
+    }
+    for (pcap_if_t *i = alldevsp; i != NULL; i = i->next) {
+        if (i->addresses != NULL) {
+            char buf[100];
+            for (auto k = i->addresses; k != NULL; k = k->next)
+            {
+                int type = get_ip_str(k->addr, buf, 100); 
+                switch(type) {
+                    case AF_INET:
+                        printf("IPV4: ");
+                        res.push_back(string(i->name)); 
+
+                }
+            }
+        }
+    }
+    pcap_freealldevs(alldevsp);
+    return res;
+}
+
+int getMACAddress(const char *name, u_char *dst) {
     char errbuf[PCAP_ERRBUF_SIZE]; 
     pcap_if_t *alldevsp; 
     if (pcap_findalldevs(&alldevsp, errbuf) == PCAP_ERROR) {
@@ -81,18 +120,14 @@ int getMACAddr(const char *name, u_char *dst) {
     }
     for (pcap_if_t *i = alldevsp; i != NULL; i = i->next) {
         if (strcmp(i->name, name) == 0) {
-	    printf("Hit\n"); 
             for (auto k = i->addresses; k != NULL; k = k->next)
-                if (k->addr->sa_family == 17) {
-                    for (int j = 10; j < 16; ++j)
-                    {
-                        dst[j-10] = k->addr->sa_data[j];
-			printf("%x:", dst[j-10]); 
-                    }
+                if (k->addr->sa_family == MAC_ADDRESS) {
+                    memcpy(dst, (char*)k->addr->sa_data + 10, 6);
+                    pcap_freealldevs(alldevsp);
+                    return 0; 
                 }
         }
     }
-    puts("[End mac].\n"); 
     pcap_freealldevs(alldevsp);
     return -1; 
 }
@@ -102,40 +137,36 @@ int addDevice(string device) {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *ptr; 
     if ((ptr = pcap_create(device.c_str(), errbuf)) == NULL) {
-        printf("ERROR : %s\n", errbuf); 
+        printf("[Error] %s\n", errbuf); 
         return -1;
     }
     if (pcap_activate(ptr) < 0) {
-        printf("ERROR : pcap_activate.\n"); 
+        printf("[Error] : pcap_activate.\n"); 
         return -1;
     }
-    printf("Activate succeed!\n");
-    int id = getIDCache().size()+1;
-    getIDCache().push_back((Info){ptr,nullptr});
-    getMACAddr(device.c_str(), getIDCache()[id-1].mac);
-    return id;
+    printf("[Info] Activation succeed!\n");
+    getIDCache()[device] = (Info){ptr,nullptr,0};
+    int res = getMACAddress(device.c_str(), getIDCache()[device].mac);
+    printf("[Info] Successfully fetched MAC address!\n");
+    if (res != 0) {
+        printf("[Error] Failed to get MAC address\n");
+    }
+    return 0;
 }
 
-std::thread activateListen(int id, int cnt = 0) {
-    pcap_t* handle = getIDCache()[id-1].handle;
-    auto callback = getIDCache()[id-1].callback;
-    std::thread thread([=](int cnt){
+std::future<int> activateListen(string id, int cnt = 0) {
+    pcap_t* handle = getIDCache()[id].handle;
+    auto callback = getIDCache()[id].callback;
+    return std::async([=](int cnt){
         int res; 
         do {
             pcap_pkthdr *hdr; 
             const u_char *data; 
             res = pcap_next_ex(handle, &hdr, &data);
-            printf("Link layer header type = %d\n", pcap_datalink(handle));
-            printf("Header info : cap_len : %d, len : %d\n", hdr->caplen, hdr->len);
-            if (hdr->caplen < 200) {
-                printf("Content:");
-                for (int i = 0;i < hdr->caplen; ++i)printf("%x",data[i]) ;
-                puts(""); 
-            }
             callback(data, hdr->caplen, id);  
-            fflush(stdout); 
             cnt = cnt - 1; 
         } while (res != PCAP_ERROR && cnt != 0);
+        if (res == PCAP_ERROR || cnt != 0) return -1; 
+        return 0; 
     }, cnt);
-    return thread; 
 }
