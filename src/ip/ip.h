@@ -4,6 +4,9 @@
 in an Ethernet II frame .
 */
 #include <netinet/ip.h>
+#include <arpa/inet.h> // inet_ntop & inet_pton
+#include <string.h> // strerror_r
+#include <arpa/inet.h> // ntohl & htonl
 #include <cstring>
 #include "src/link/link.h"
 #include "ip_route.h"
@@ -65,3 +68,7 @@ struct ip_header_t {
     uint8_t ihl() const { return ver_ihl &0x0F; }
     size_t size() const { return ihl() * 4; }
   };
+
+using std::to_string; 
+string ipv4_int_to_string(uint32_t in, bool *const success);
+uint32_t ipv4_string_to_int(const string &in, bool *const success);

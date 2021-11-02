@@ -28,3 +28,5 @@ struct RouteTableEntry {
     u_char deviceMac[6]; 
     string deviceName; 
 };
+
+void initLegalPort();

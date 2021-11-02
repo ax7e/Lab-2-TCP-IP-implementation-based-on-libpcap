@@ -100,7 +100,6 @@ vector<string> getLegalPortName() {
                 int type = get_ip_str(k->addr, buf, 100); 
                 switch(type) {
                     case AF_INET:
-                        printf("IPV4: ");
                         res.push_back(string(i->name)); 
 
                 }
@@ -170,3 +169,4 @@ std::future<int> activateListen(string id, int cnt = 0) {
         return 0; 
     }, cnt);
 }
+

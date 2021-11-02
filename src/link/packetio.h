@@ -1,6 +1,6 @@
 #pragma once
 
-#define DEFALUT_ETH_TYPE 0x80
+#define IPV4_ETHER_TYPE 0x08
 /**
 * @file packetio.h
 * @brief Library supporting sending/receiving Ethernet II frames.
