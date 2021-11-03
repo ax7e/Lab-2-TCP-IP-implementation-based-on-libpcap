@@ -2,10 +2,13 @@
 #include <netinet/ip.h>
 #include <arpa/inet.h>
 #include <string> 
+#include <future>
 #include <vector> 
 
 using std::string; 
 using std::vector; 
+#pragma once
+#include <netinet/ip.h>
 
 /**
 * @brief Manully add an item to routing table . Useful when talking
@@ -28,5 +31,13 @@ struct RouteTableEntry {
     u_char deviceMac[6]; 
     string deviceName; 
 };
+bool operator==(const RouteTableEntry &lhs, const RouteTableEntry &rhs) ;
+bool operator<(const RouteTableEntry &lhs, const RouteTableEntry &rhs) ;
 
-void initLegalPort();
+struct DistVectorEntry {
+    static const int infinityDist = 1e9; 
+    u_char nextHopMAC[6]; 
+    int distance; 
+};
+
+vector<std::future<int>> initRouteService(int);

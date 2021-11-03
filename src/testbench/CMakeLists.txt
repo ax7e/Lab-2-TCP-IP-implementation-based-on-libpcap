@@ -6,5 +6,8 @@ target_link_libraries(link_listen PUBLIC link_lib)
 add_executable(ip_test ip/ip_test.cpp)
 target_link_libraries(ip_test PUBLIC ip_lib)
 
+add_executable(ip_route ip/ip_route_test.cpp)
+target_link_libraries(ip_route PUBLIC ip_lib)
+
 add_executable(show_addr link/show_address.cpp)
 target_link_libraries(show_addr PUBLIC ip_lib link_lib)

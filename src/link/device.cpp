@@ -139,10 +139,16 @@ int addDevice(string device) {
         printf("[Error] %s\n", errbuf); 
         return -1;
     }
+    auto tmp = pcap_set_immediate_mode(ptr, 1);
+    if (tmp != 0) {
+        printf("[Error] Set Immediate Mode.\n"); 
+        return -1;
+    }
     if (pcap_activate(ptr) < 0) {
         printf("[Error] : pcap_activate.\n"); 
         return -1;
     }
+
     printf("[Info] Activation succeed!\n");
     getIDCache()[device] = (Info){ptr,nullptr,0};
     int res = getMACAddress(device.c_str(), getIDCache()[device].mac);
@@ -156,6 +162,7 @@ int addDevice(string device) {
 std::future<int> activateListen(string id, int cnt = 0) {
     pcap_t* handle = getIDCache()[id].handle;
     auto callback = getIDCache()[id].callback;
+    printf("Listen thread of port %s begins. \n", id.c_str()); 
     return std::async([=](int cnt){
         int res; 
         do {
@@ -164,6 +171,7 @@ std::future<int> activateListen(string id, int cnt = 0) {
             res = pcap_next_ex(handle, &hdr, &data);
             callback(data, hdr->caplen, id);  
             cnt = cnt - 1; 
+            std::this_thread::sleep_for(std::chrono::milliseconds(20)); 
         } while (res != PCAP_ERROR && cnt != 0);
         if (res == PCAP_ERROR || cnt != 0) return -1; 
         return 0; 

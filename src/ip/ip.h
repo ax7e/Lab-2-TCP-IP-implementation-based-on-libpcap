@@ -11,6 +11,7 @@ in an Ethernet II frame .
 #include "src/link/link.h"
 #include "ip_route.h"
 #define IP_HEADER_LEN 20
+#define PREMBLE_LEN 10
 
 /**
 * @brief Send an IP packet to specified host .
@@ -23,7 +24,7 @@ in an Ethernet II frame .
 * @return 0 on success , -1 on error .
 */
 int sendIPPacket(const struct in_addr src, const struct in_addr dest,
-                 int proto, const void *buf, int len);
+                 int proto, const void *buf, int len, std::optional<string> = std::nullopt);
 /**
 * @brief Process an IP packet upon receiving it.
 *
@@ -50,6 +51,7 @@ int setIPPacketReceiveCallback(IPPacketReceiveCallback callback);
  * @return 0 on success, otherwise failure
  */
 int getIPAddress(const char *name, u_char *dst);
+int getIPAddress(const char *name, in_addr *dst);
 
 const uint32_t sToIP(string s) ;
 
@@ -72,3 +74,5 @@ struct ip_header_t {
 using std::to_string; 
 string ipv4_int_to_string(uint32_t in, bool *const success);
 uint32_t ipv4_string_to_int(const string &in, bool *const success);
+
+vector<std::future<int>> initLegalPort(int);

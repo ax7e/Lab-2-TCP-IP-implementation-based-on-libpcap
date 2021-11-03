@@ -12,7 +12,7 @@ int main(int argc, char *argv[]) {
     mac_t mac = {10,100,1,1,182,206};
     auto deviceName = getLegalPortName()[0]; 
 
-    initLegalPort();
+    auto r = initLegalPort(20);
     setRoutingTable(tableDest, mask, (const void*) mac, deviceName);
     const char *data = "Hello World!";
     sendIPPacket(dest, src, 253, data, strlen(data));
