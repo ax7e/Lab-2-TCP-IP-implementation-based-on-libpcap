@@ -147,12 +147,14 @@ void updateDistVecEntry(const uint32_t ip, DistVectorEntry e, string device)
     e.distance += 1;
     if (distVector.count(ip))
     {
+        uint64_t old_mac; memcpy(&old_mac, distVector[ip].nextHopMAC, 6);
+        uint64_t mac; memcpy(&mac, e.nextHopMAC, 6);
         auto &e0 = distVector[ip];
-        if (e.distance < e0.distance)
+        if (old_mac == mac || e.distance < e0.distance)
         {
+            debugUpdateHappend |= e.distance != e0.distance; 
             e0 = e;
             setRoutingTable((in_addr){htonl(ip)}, (in_addr){htonl(0xFFFFFFFF)},e.nextHopMAC,device);
-            debugUpdateHappend = 1; 
             V2 printf("[Info] Set type 1.\n");
         } 
     }
@@ -281,11 +283,11 @@ void checkDVTimeOut() {
     if (toDel.size()) {
         printf("[Info] Timeout happened and deleted.\n");
         decltype(distVector) n;
-        for (const auto &e:distVector) {
+        for (auto e:distVector) {
             uint64_t mac;
             memcpy(&mac, e.second.nextHopMAC, 6);
-            if (toDel.count(mac)) ;
-            else n.insert(e);
+            if (toDel.count(mac)) e.second.distance = e.second.infinityDist;
+            n.insert(e);
         }
         distVector = n;
         debugDistVector(distVector); 
@@ -325,6 +327,7 @@ vector<std::future<int>> initRouteService(int cnt) {
                 free(buf);
             }
             checkDVTimeOut(); 
+            if (cnt % 10 == 9) V1 debugDistVector(distVector) ;
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         return 0; 
