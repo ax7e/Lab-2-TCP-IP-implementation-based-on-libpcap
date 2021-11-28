@@ -81,7 +81,7 @@ int queryRouteTable(RouteTableEntry &res, uint32_t ip) {
 int routeIPPacket(const void *buf, int len, std::optional<string> portName = std::nullopt) {
     if (!portName) {
         RouteTableEntry e;
-        int res = queryRouteTable(e, ((ip_header_t *)buf)->dst_addr.s_addr);
+        int res = queryRouteTable(e, ((ip_header_t *)buf)->dst_addr);
         if (res == 0)
         {
             V1 printf("[Info] Drop IP packet due to failed to find respective route table entry\n");
@@ -96,7 +96,7 @@ int routeIPPacket(const void *buf, int len, std::optional<string> portName = std
     return 0;
 }
 
-int sendIPPacket(const struct in_addr src, const struct in_addr dest, 
+int sendIPPacket(const uint32_t src, const uint32_t dest, 
     int proto, const void *data, int len, std::optional<string> portName) {
     unsigned char buf[len + IP_HEADER_LEN];
     ip_header_t *header = (ip_header_t*)buf; 
@@ -231,16 +231,15 @@ int updateDistVecTable(const map<uint32_t, DistVectorEntry> &m, string device) {
 }
 
 typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
-IPPacketReceiveCallback ipReceieveCallback = nullptr;
+IPPacketReceiveCallback ipReceiveCallback = nullptr;
 
-int setIPPacketReceieveCallback(IPPacketReceiveCallback callback)
+int setIPPacketReceiveCallback(IPPacketReceiveCallback callback)
 {
-    ipReceieveCallback = callback;
+    ipReceiveCallback = callback;
     return 0;
 }
 
-//typedef int (* frameReceiveCallback)(const void*, int , string);
-int receieveIPPacketEtherWrapper(const void * packet, int len, string from) {
+int receiveIPPacketEtherWrapper(const void * packet, int len, string from) {
     V2 printf("[Info] received ether packet called at port %s.\n", from.c_str());
     if (containsDistVec(packet, len)){
         V2 printf("[Info] Detected DV broadcast at port %s\n", from.c_str()); 
@@ -250,7 +249,7 @@ int receieveIPPacketEtherWrapper(const void * packet, int len, string from) {
     } else {
         ip_header_t *header_ip = (ip_header_t*)((char*)packet + ETH_HLEN); 
         sendIPPacket(header_ip->src_addr, header_ip->dst_addr, header_ip->protocol, header_ip + ETH_HLEN, len - ETH_HLEN - IP_HEADER_LEN);
-        return ipReceieveCallback ? ipReceieveCallback((char*)packet + IP_HEADER_LEN, len) : 0; 
+        return ipReceiveCallback ? ipReceiveCallback((char*)packet + ETH_HLEN, len) : 0; 
     }
 }
 vector<std::future<int>> initLegalPort(int cnt) {
@@ -259,7 +258,7 @@ vector<std::future<int>> initLegalPort(int cnt) {
     for (auto x : r)
     {
         addDevice(x);
-        setFrameReceiveCallback(x, receieveIPPacketEtherWrapper);
+        setFrameReceiveCallback(x, receiveIPPacketEtherWrapper);
         V2 printf("[Info] Before actiave listen on %s\n", x.c_str()); 
         res.push_back(activateListen(x, cnt));
         V2 printf("[Info] End actiave listen on %s\n", x.c_str()); 
@@ -323,7 +322,7 @@ vector<std::future<int>> initRouteService(int cnt) {
                 int proto = 253;
                 int bufLen;
                 void *buf = writeDistVec(bufLen, local_host);
-                sendIPPacket(src, dst, proto, buf, bufLen, local_host);
+                sendIPPacket(src.s_addr, dst.s_addr, proto, buf, bufLen, local_host);
                 free(buf);
             }
             checkDVTimeOut(); 

@@ -1,0 +1,6 @@
+#pragma once
+
+#define TCP_SEND_BUFFER_SIZE 1024
+#define TCP_RECV_BUFFER_SIZE 1024
+#define TCP_HEADER_LEN 20
+#define PROTO_TCP 6

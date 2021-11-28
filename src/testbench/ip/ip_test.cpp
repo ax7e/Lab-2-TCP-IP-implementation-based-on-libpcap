@@ -15,5 +15,5 @@ int main(int argc, char *argv[]) {
     auto r = initLegalPort(20);
     setRoutingTable(tableDest, mask, (const void*) mac, deviceName);
     const char *data = "Hello World!";
-    sendIPPacket(dest, src, 253, data, strlen(data));
+    sendIPPacket(dest.s_addr, src.s_addr, 253, data, strlen(data));
 }

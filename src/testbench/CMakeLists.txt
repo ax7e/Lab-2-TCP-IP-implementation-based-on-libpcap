@@ -11,3 +11,20 @@ target_link_libraries(ip_route PUBLIC ip_lib)
 
 add_executable(show_addr link/show_address.cpp)
 target_link_libraries(show_addr PUBLIC ip_lib link_lib)
+
+add_library(unp
+    tcp/unp.cpp
+    tcp/unp.h
+)
+# set (LIB_WRAPS "-Wl,--wrap=bind,--wrap=listen,--wrap=connect,--wrap=accept,--wrap=bind,--wrap=read,--wrap=close,--wrap=getaddrinfo" tcp_lib)
+set(LIB_WRAPS "-Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo" tcp_lib unp)
+
+
+add_executable(echo_client tcp/echo_client.cpp)
+target_link_libraries(echo_client PUBLIC ${LIB_WRAPS})
+add_executable(echo_server tcp/echo_server.cpp)
+target_link_libraries(echo_server PUBLIC ${LIB_WRAPS})
+add_executable(perf_server tcp/perf_server.cpp)
+target_link_libraries(perf_server PUBLIC ${LIB_WRAPS})
+add_executable(perf_client tcp/perf_client.cpp)
+target_link_libraries(perf_client PUBLIC ${LIB_WRAPS})
