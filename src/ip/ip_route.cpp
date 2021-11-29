@@ -70,8 +70,10 @@ int queryRouteTable(RouteTableEntry &res, uint32_t ip) {
     for (auto x : routeTable) {
         V2 printf("[Info] Route table entry (dest=%s,mask=%s)\n", ipv4_int_to_string(x.dest.s_addr, nullptr).c_str(),
             ipv4_int_to_string(x.mask.s_addr, nullptr).c_str());
-        if (x.dest.s_addr == (ip&x.mask.s_addr) && x.mask.s_addr > resMask) {
-            resMask = x.mask.s_addr; 
+        printf("[Info] %x,%x,(mask=%x)\n", ip, x.dest.s_addr, x.mask.s_addr);
+        uint32_t eip = ntohl(x.dest.s_addr), eMask = x.mask.s_addr;
+        if (eip == (ip&eMask) && eMask > resMask) {
+            resMask = eMask;
             res = x; 
         }
     }
@@ -82,6 +84,7 @@ int routeIPPacket(const void *buf, int len, std::optional<string> portName = std
     if (!portName) {
         RouteTableEntry e;
         int res = queryRouteTable(e, ((ip_header_t *)buf)->dst_addr);
+        printf("%x\n", ((ip_header_t *)buf)->dst_addr);
         if (res == 0)
         {
             V1 printf("[Info] Drop IP packet due to failed to find respective route table entry\n");
@@ -181,7 +184,7 @@ void debugDistVector(const map<uint32_t, DistVectorEntry> &v)
     for (auto e : v) 
     {
         uint32_t ip = e.first;
-        V1 printf("[Info] Entry %d.%d.%d.%d, ", (ip>>24)&0xFF,(ip>>16)&0xFF,(ip>>8)&0xFF,(ip>>0)&0xFF); 
+        V1 printf("[Info] Vector Entry (%x)%d.%d.%d.%d, ", ip, (ip>>24)&0xFF,(ip>>16)&0xFF,(ip>>8)&0xFF,(ip>>0)&0xFF); 
         for (int j = 0;j < 6; ++j) printf("%02x%c", e.second.nextHopMAC[j], ":,"[j==5]); 
         printf("%d\n", e.second.distance);
     }

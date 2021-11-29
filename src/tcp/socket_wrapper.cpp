@@ -3,38 +3,44 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <vector>
-#include <cstring> 
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 
-int __wrap_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, 
-    struct addrinfo **res) {
-    addrinfo *ret = new addrinfo; 
-    sockaddr_in *addr = new struct sockaddr_in; 
-    if (node != nullptr && service != nullptr) {
-        bool valid_hints = hints != nullptr && (hints->ai_family == AF_INET && hints->ai_protocol == IPPROTO_TCP
-        && hints->ai_flags == 0);
-        if (valid_hints) {
-            addr->sin_family = AF_INET; 
-            if (node) {
+int __wrap_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
+                       struct addrinfo **res)
+{
+    addrinfo *ret = new addrinfo;
+    sockaddr_in *addr = new struct sockaddr_in;
+    if (node != nullptr && service != nullptr)
+    {
+        bool valid_hints = hints != nullptr && (hints->ai_family == AF_INET && hints->ai_protocol == IPPROTO_TCP && hints->ai_flags == 0);
+        if (valid_hints)
+        {
+            addr->sin_family = AF_INET;
+            if (node)
+            {
                 // inet_aton() returns nonzero if the address is valid, zero if not.
-                if (inet_aton(node, &addr->sin_addr) == 0) {
+                if (inet_aton(node, &addr->sin_addr) == 0)
+                {
                     delete (ret);
-                    delete (addr); 
+                    delete (addr);
                     return EAI_NONAME;
                 }
-            } else {
-                addr->sin_addr.s_addr = 0; 
+            }
+            else
+            {
+                addr->sin_addr.s_addr = 0;
             }
             addr->sin_port = service ? htons(atoi(service)) : 0;
             printf("%x\n", addr->sin_port);
-            ret->ai_next = nullptr; 
+            ret->ai_next = nullptr;
             ret->ai_flags = 0;
             ret->ai_family = AF_INET;
             ret->ai_socktype = SOCK_STREAM;
             ret->ai_protocol = IPPROTO_TCP;
             ret->ai_addrlen = sizeof(struct sockaddr_in);
-            ret->ai_addr = (sockaddr*)addr;
+            ret->ai_addr = (sockaddr *)addr;
             ret->ai_canonname = nullptr;
             (*res) = ret;
             return 0;
@@ -45,15 +51,34 @@ int __wrap_getaddrinfo(const char *node, const char *service, const struct addri
     return EAI_SERVICE;
 }
 
-
-int __wrap_freeaddrinfo(struct addrinfo *res) {
-    std::vector<addrinfo*> to_del; 
-    for (auto i = res; i ; i = i->ai_next) {
+int __wrap_freeaddrinfo(struct addrinfo *res)
+{
+    std::vector<addrinfo *> to_del;
+    for (auto i = res; i; i = i->ai_next)
+    {
         to_del.push_back(i);
     }
-    for (auto u : to_del) {
-        if (u->ai_addr) delete u->ai_addr;
+    for (auto u : to_del)
+    {
+        if (u->ai_addr)
+            delete u->ai_addr;
         delete u;
     }
-    return 0; 
+    return 0;
 }
+
+int __wrap_socket(int domain, int type, int protocol) ;
+
+int __wrap_bind(int socket, const struct sockaddr *address, socklen_t address_len);
+
+int __wrap_listen(int socket, int backlog);
+
+int __wrap_connect(int socket, int backlog);
+
+int __wrap_accept(int socket, struct sockaddr *address, socklen_t *address_len);
+
+ssize_t __wrap_write(int fildes, const void *buf, size_t nbyte);
+
+ssize_t __wrap_read(int fildes, void *buf, size_t nbyte);
+
+int __wrap_close(int fildes);
