@@ -162,7 +162,7 @@ int addDevice(string device) {
 std::future<int> activateListen(string id, int cnt = 0) {
     pcap_t* handle = getIDCache()[id].handle;
     auto callback = getIDCache()[id].callback;
-    printf("Listen thread of port %s begins. \n", id.c_str()); 
+    printf("[Info] Listen thread of port %s begins. \n", id.c_str()); 
     return std::async([=](int cnt){
         int res; 
         do {

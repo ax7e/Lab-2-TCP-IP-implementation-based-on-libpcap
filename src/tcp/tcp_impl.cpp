@@ -1,14 +1,15 @@
-#include "tcp_impl.h"
-#include <thread>
-#include <cstring>
-#include <sys/socket.h>
-#include "src/ip/ip.h"
 #include <set>
 #include <map>
 #include <mutex>
+#include <deque>
+#include <thread>
 #include <vector>
-#include <cassert>
 #include <future>
+#include <cassert>
+#include <cstring>
+#include "tcp_impl.h"
+#include "src/ip/ip.h"
+#include <sys/socket.h>
 
 struct tcp_header_t {
     uint16_t srcPort;
@@ -37,6 +38,22 @@ enum struct TCPState {
     TIMEWAIT
 };
 
+string to_string(TCPState state) {
+#define BRANCH(x) if(state==TCPState::x)return #x;
+    BRANCH(CLOSED)
+    BRANCH(CLOSEING)
+    BRANCH(LISTEN) 
+    BRANCH(SYN_RCVD) 
+    BRANCH(SYN_SENT) 
+    BRANCH(ESTAB) 
+    BRANCH(FINWAIT_1)
+    BRANCH(FINWAIT_2)
+    BRANCH(CLOSE_WAIT) 
+    BRANCH(LAST_ACK)
+    BRANCH(TIMEWAIT)
+    return "Error";
+}
+
 struct socket_t {
     int srcPort;
     //In network form
@@ -64,53 +81,163 @@ bool operator<(const socket_t &lhs, const socket_t &rhs) {
     return false;
 }
 
+//typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
+void debugTCPPacket(const void *buf, int len) {
+    printf("[Info] TCP packet:\n");
+    tcp_header_t *header = (tcp_header_t *)((char*)buf + IP_HEADER_LEN);
+    ip_header_t *hdr_ip = (ip_header_t *)(buf);
+    printf("(%x:%d<->%x:%d),", hdr_ip->src_addr, ntohs(header->srcPort), (hdr_ip->dst_addr), ntohs(header->dstPort)); 
+    printf("[ack:%d,seq:%d,window:%d,checksum:%x]\n",ntohl(header->ack),ntohl(header->seq),header->window,header->checksum);
+    printf("Flags:");
+#define CHECK_FLAG(x) if (header->flags&TCP_FLAG_##x){printf(#x);putchar(' ');}
+    CHECK_FLAG(URG)
+    CHECK_FLAG(ACK)
+    CHECK_FLAG(PSH)
+    CHECK_FLAG(RST)
+    CHECK_FLAG(SYN)
+    CHECK_FLAG(FIN)
+    puts("");
+}
+
 struct TCB {
     std::thread thread;
     TCPState state;
     socket_t socket;
-    int seq, ack;
+    int ack;
     uint8_t *sendBuffer;
     // [0, snd_una)-[snd_una, snd_nxt)-[snd_nxt, snd_sqn) 
     int snd_una;
+    //TODO : NOT IMPLEMENTED
     int snd_nxt;
     //TODO : NOT IMPLEMENTED
     int snd_wnd;
     int snd_iss;
     int snd_sqn;
-    uint32_t iss;
     int rcv_nxt;
+    vector<char> rcv_buf;
+    // request buffer, the promise<int> marks whether the read request is finished, 0 makrs succeed, -1 otherwise.
+    std::deque<std::tuple<char*,int,std::promise<int>> > rcv_requests; 
+    int rcv_buf_p;
+    /** There are several cases on receiving data
+     *  1. connection not established, buffer the request
+     *  2. connection established, buffer the request and process
+     *  3. sender closed, do not buffer new data, but still answer user using the old data
+     */
+    std::future<int> readData(char *buf, int len) {
+        static const std::set<TCPState> ill = { TCPState::CLOSEING, TCPState::LAST_ACK, TCPState::TIMEWAIT, TCPState::CLOSED };
+        std::lock_guard<std::mutex> lock(mutex); 
+        std::promise<int> pro;
+        auto f = pro.get_future();
+        if (ill.count(state)) {
+            pro.set_value(-1); 
+            return f;
+        }
+        rcv_requests.push_back(std::make_tuple(buf, len, std::move(pro)));
+        processReceiveRequest(); 
+        return f;
+    }
+    void processReceiveRequest() {
+        static const std::set<TCPState> ill = { TCPState::CLOSEING, TCPState::LAST_ACK, TCPState::TIMEWAIT, TCPState::CLOSED,
+            TCPState::CLOSE_WAIT};
+        int s = rcv_buf.size(); 
+        while (rcv_buf_p < s) {
+            while (!rcv_requests.empty() && s - rcv_buf_p >= std::get<1>(rcv_requests.front())) {
+                memcpy(std::get<0>(rcv_requests.front()), 
+                    &rcv_buf[rcv_buf_p], std::get<1>(rcv_requests.front()));
+                std::get<2>(rcv_requests.front()).set_value(0); 
+                rcv_requests.pop_front();
+            }
+        }
+        //No furthur incoming packet, release all the request.
+        if (ill.count(state))
+        {
+            while (!rcv_requests.empty())
+            {
+                std::get<2>(rcv_requests.front()).set_value(-1);
+                rcv_requests.pop_front();
+            }
+        }
+    }
     //TODO : NOT IMPLEMENTED
     int rcv_wnd;
     std::mutex mutex;
     bool legalToSend() { 
-        static const std::set<TCPState> legal = { TCPState::ESTAB, TCPState::CLOSE_WAIT }; 
+        //TODO: User should be able to send a syn request under listen state according to RFC 793
+        static const std::set<TCPState> legal = { TCPState::ESTAB, TCPState::CLOSE_WAIT, 
+            TCPState::SYN_SENT, TCPState::SYN_RCVD}; 
         if (!legal.count(state)) {
-            printf("[Err] Try to send packet in closed TCP state machine.\n"); 
             return false;
         }
         return true;
     }
+    /*
+    bool legalToReceive() {
+        static const std::set<TCPState> legal = { TCPState::ESTAB, TCPState::LISTEN, TCPState::SYN_SENT, TCPState::SYN_RCVD, };
+        if (!legal.count(state)) {
+            return false;
+        }
+        return true;
+    }
+    */
     void clearBufferedTCPPacket() {
         if (!legalToSend()) return;
         while (snd_sqn > snd_nxt) {
             int len = std::min(TCP_MAX_PACKET_LENGTH, snd_sqn - snd_nxt);
-            sendTCPPacket(nullptr, 0, TCP_FLAG_ACK);
+            constructTCPPacket(nullptr, 0, TCP_FLAG_ACK);
             snd_nxt += len;
         }
     }
+    void checkShrink(){
+        int s = rcv_buf.size() - rcv_buf_p;
+        if (rcv_buf.size() > 100 && rcv_buf.size() - rcv_buf_p < rcv_buf.size() / 2) {
+            for (int i = 0;i < rcv_buf.size() - rcv_buf_p;i++) {
+                rcv_buf[i] = rcv_buf[i+rcv_buf_p];
+            }
+            rcv_buf_p = 0; 
+        }
+    }
+    void pushReceiveBuffer(char *buf, int len) {
+        checkShrink(); 
+        for (int i = 0;i < len;++i) rcv_buf.push_back(buf[i]); 
+    }
+    void init()
+    {
+        sendBuffer = new uint8_t[TCP_SEND_BUFFER_SIZE << 1];
+        snd_una = snd_sqn = snd_nxt = snd_iss = rand();
+        thread = std::thread(tcpSenderThread, std::ref(*this));
+        rcv_buf_p = 0; 
+        state = TCPState::CLOSED;
+        printf("[Info] Init finished, snd_sqn = %d, snd_iss = %d\n", snd_sqn, snd_iss);
+    }
+
     int sendPacket(const void *buf, int len, uint8_t flags = TCP_FLAG_ACK, bool imme = false) {
-        if (!legalToSend()) return -1;
+        std::lock_guard<std::mutex> g(mutex);
+        if (!legalToSend()) {
+            printf("[Err] Try to send packet in closed TCP state machine.\n"); 
+            return -1;
+        }
         __sendPacket(buf, len, flags, imme);
         return 0; 
     }
+    /**
+     * @brief Call Ether interface to send packet. (shouldn't have a lock)
+     * @param buf Pure data
+     * @param len 
+     * @param flags 
+     * @param imme Will the function call be blocked until the packet returns
+     * @return whether this operation succeeded 
+     */
     int __sendPacket(const void *buf, int len, uint8_t flags = TCP_FLAG_ACK, bool imme = false)
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        printf("[Info] Try to send.\n");
+        printf("[Info] snd_sqn = %d, snd_iss = %d\n", snd_sqn, snd_iss);
         if (imme) {
             clearBufferedTCPPacket();
         }
+        printf("[Info] clear buffered packet succeed.\n");
         if (snd_una - snd_iss > TCP_SEND_BUFFER_SIZE)
         {
+            printf("[Info] send buffer shift.\n");
             memcpy(sendBuffer, sendBuffer + TCP_SEND_BUFFER_SIZE, TCP_SEND_BUFFER_SIZE);
             snd_iss += TCP_SEND_BUFFER_SIZE;
         }
@@ -119,25 +246,28 @@ struct TCB {
             printf("[Err] TCP send buffer overflow\n");
             return -1;
         }
-        memcpy(sendBuffer + snd_sqn - snd_iss, buf, TCP_SEND_BUFFER_SIZE);
+        if (len) {
+            memcpy(sendBuffer + snd_sqn - snd_iss, buf, len);
+        }
         snd_sqn += len != 0 ? len : 1;
         if (imme) {
-            sendTCPPacket(buf, len, flags); 
+            constructTCPPacket(buf, len, flags); 
         }
         return 0;
     }
-    int sendTCPPacket(const void *buf, int len, uint8_t flags) {
+    int constructTCPPacket(const void *buf, int len, uint8_t flags) {
+        printf("[Info] construct packet.\n");
         char obuf[len + TCP_HEADER_LEN];
         tcp_header_t* header = (tcp_header_t*)obuf;
         header->srcPort = htons(socket.srcPort); 
         header->dstPort = htons(socket.dstPort);
-        header->seq = htonl(seq);
+        header->seq = htonl(snd_sqn);
         header->ack = htonl(ack); 
         header->offset = 5<<4;
         header->flags = flags;
         header->window = htons(snd_wnd);
         header->urgentP = 0;
-        memcpy(obuf + TCP_HEADER_LEN, buf, TCP_HEADER_LEN);
+        memcpy(obuf + TCP_HEADER_LEN, buf, len);
         ip_header_t fakeHeader;
         fakeHeader.src_addr = socket.srcIP;
         fakeHeader.dst_addr = socket.dstIP;
@@ -208,7 +338,8 @@ struct TCB {
     void processTCPStateMachineOnReceive(const void *buf, int len)
     {
         std::lock_guard<std::mutex> lock(mutex);
-        tcp_header_t *hdr = (tcp_header_t *)buf;
+        printf("[Info] Before state = %s\n", to_string(state).c_str());
+        tcp_header_t *hdr = (tcp_header_t *)((char*)buf+IP_HEADER_LEN);
         auto syn = [&]
         { return (HAS_FLAG(hdr->flags, TCP_FLAG_SYN)); };
         auto ack = [&]
@@ -217,7 +348,6 @@ struct TCB {
         { return ack() && hdr->ack == rcv_nxt; };
         auto fin = [&]
         { return (HAS_FLAG(hdr->flags, TCP_FLAG_FIN)); };
-        auto sqn = [&] { return hdr->seq; };
         switch (state)
         {
         case TCPState::CLOSED:
@@ -225,6 +355,7 @@ struct TCB {
         case TCPState::CLOSE_WAIT:
             break;
         case TCPState::LISTEN:
+            printf("[Info] %d,%d\n",syn(),valid_ack());
             if (syn() && !valid_ack())
             {
                 __sendPacket(nullptr, 0, TCP_FLAG_SYN | TCP_FLAG_ACK, true); 
@@ -288,10 +419,37 @@ struct TCB {
             }
         receivePacket:
             if (hdr->seq == rcv_nxt) {
-                hdr->seq += len - TCP_HEADER_LEN; 
-                printf("[Info] Received packet of [%d,%d).\n", hdr->seq - len + TCP_HEADER_LEN, hdr->seq);
+                rcv_nxt += len - TCP_HEADER_LEN;
+                printf("[Info] Received packet of [%d,%d).\n", hdr->seq, hdr->seq + len - TCP_HEADER_LEN);
+                pushReceiveBuffer((char*)buf + TCP_HEADER_LEN, len - TCP_HEADER_LEN);
             }
         }
+        printf("[Info] Now state = %s\n", to_string(state).c_str());
+    }
+    int startConnection() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (state != TCPState::CLOSED) {
+            printf("[Err] Try to start connection on not closed TCB.\n");
+            return -1;
+        }
+        printf("[Info] Start connection snd_sqn = %d, snd_iss = %d\n", snd_sqn, snd_iss);
+        auto t =  __sendPacket(nullptr, 0, TCP_FLAG_SYN, true);
+        state = TCPState::SYN_SENT;
+        return t;
+    }
+    int startListen() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (state != TCPState::CLOSED) {
+            printf("[Err] Try to start listen on not closed TCB.\n");
+            return -1;
+        }
+        printf("[Info] snd_sqn = %d, snd_iss = %d\n", snd_sqn, snd_iss);
+        state = TCPState::LISTEN;
+        return 0;
+    }
+    bool established(){ 
+        std::lock_guard<std::mutex> lock(mutex);
+        return state == TCPState::ESTAB; 
     }
 };
 
@@ -308,22 +466,17 @@ void tcpSenderThread(TCB &c)
     }
 }
 
-void initTCPConnection(TCB &c)
-{
-    c.sendBuffer = new uint8_t[TCP_SEND_BUFFER_SIZE << 1];
-    c.iss = rand();
-    c.thread = std::thread(tcpSenderThread, std::ref(c));
-}
+
 
 void freeConnectionBuffer(TCB &c)
 {
     delete c.sendBuffer;
 }
 
+//TODO:needs mutex
 std::map<socket_t, TCB> connections;
 
-//typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
-int TCPPacketReceiveIPInterface(const void *buf, int len)
+int TCPOnIPCallback(const void *buf, int len)
 {
     if (len < IP_HEADER_LEN + TCP_HEADER_LEN)
     {
@@ -331,55 +484,95 @@ int TCPPacketReceiveIPInterface(const void *buf, int len)
         return -1;
     }
     ip_header_t *header_ip = (ip_header_t *)(buf);
-    tcp_header_t *header_tcp = (tcp_header_t *)((char *)header_ip + TCP_HEADER_LEN);
-    auto key = socket_t(header_tcp->srcPort, header_tcp->dstPort, header_ip->src_addr, header_ip->dst_addr);
+    tcp_header_t *header_tcp = (tcp_header_t *)(((char *)buf) + IP_HEADER_LEN);
+    if (header_ip->protocol != PROTO_TCP) {
+        printf("[Info] Drop packet since it's not TCP\n");
+    }
+    auto key = socket_t(ntohs(header_tcp->srcPort), header_ip->src_addr, header_ip->dst_addr, ntohs(header_tcp->dstPort));
+    std::swap(key.dstIP,key.srcIP);
+    std::swap(key.dstPort,key.srcPort);
+    printf("Q (%d,%d,%x,%x)\n",key.srcPort,key.dstPort,key.srcIP,key.dstIP);
     if (!connections.count(key))
     {
         printf("[Err] TCP connection does not exist\n");
         return -1;
     }
+    debugTCPPacket((const char *)buf, len);
     connections[key].processTCPStateMachineOnReceive(buf, len);
     return 0;
 }
 
 vector<std::future<int>> initTcpService(int cnt)
 {
+    setIPPacketReceiveCallback(TCPOnIPCallback);
     return initRouteService(cnt);
 }
 
 //Just for debug.
 void testTCPSendPacket(){
-    TCB c; 
+    socket_t socket;
+    socket.dstIP = 0x0a640101;
+    socket.srcIP = 0x23333332;
+    socket.srcPort = 123;
+    socket.dstPort = 456;
+    TCB &c=connections[socket]; 
+    c.socket=socket;
     auto r = initTcpService(100); 
-    initTCPConnection(c); 
-    c.socket.dstIP = 0x0a640101;
-    c.socket.srcIP = 0x23333332;
-    c.socket.srcPort = 123;
-    c.socket.dstPort = 456;
+    c.init();
     char buf[] = "Hello World!"; 
     for (int i = 0; i < 100;++i) {
         printf("[Info] Before send TCP Packet.\n");
-        c.sendTCPPacket(buf, strlen(buf), TCP_FLAG_SYN);
+        c.constructTCPPacket(buf, strlen(buf), TCP_FLAG_SYN);
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     }
 }
 
 //Just for debug.
 void testTCPEchoServer() {
-    TCB c; 
-    c.socket.dstIP = 0x0a640101;
-    c.socket.srcIP = 0x23333332;
-    c.socket.srcPort = 123;
-    c.socket.dstPort = 456;
+    socket_t socket;
+    socket.dstIP = 0x0a640102;
+    socket.srcIP = 0x0a640101;
+    socket.srcPort = 123;
+    socket.dstPort = 456;
+    TCB &c=connections[socket]; 
+    auto &key=socket;
+    printf("I (%hu,%hu,%x,%x)\n",key.srcPort,key.dstPort,key.srcIP,key.dstIP);
+    c.socket=socket;
+    c.init();
+    printf("[Info] Server should be ns1.\n");
     auto r = initTcpService(100); 
+    c.startListen();
+    for (int i = 0;i < 10;++i) {
+        char buf[10];
+        c.readData(buf, 1); 
+        printf("[Info] Server received [%c].\n", buf[0]); 
+    }
+    c.sendCloseSignal();
 }
 
-
 void testTCPEchoClient() {
-    TCB c; 
-    c.socket.srcIP = 0x0a640101;
-    c.socket.dstIP = 0x23333332;
-    c.socket.dstPort = 123;
-    c.socket.srcPort = 456;
-
+    socket_t socket;
+    socket.srcIP = 0x0a640102;
+    socket.dstIP = 0x0a640101;
+    socket.dstPort = 123;
+    socket.srcPort = 456;
+    TCB &c=connections[socket]; 
+    auto &key=socket;
+    printf("I (%hu,%hu,%x,%x)\n",key.srcPort,key.dstPort,key.srcIP,key.dstIP);
+    c.socket=socket;
+    c.init();
+    auto r = initTcpService(100); 
+    const char *buf = "0123456789";
+    printf("[Info] trys to start tcp connection.\n");
+    printf("[Info] Client should be ns2.\n");
+    //TODO: This is ugly, (wait for dist vector)
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    c.startConnection();
+    printf("[Info] trys to start tcp connection.\n");
+    //TODO: This is ugly, (wait for handshake)
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    for (int i = 0;i < strlen(buf); ++i) {
+        c.sendPacket(buf+i, 1);
+    }
+    c.sendCloseSignal();
 }

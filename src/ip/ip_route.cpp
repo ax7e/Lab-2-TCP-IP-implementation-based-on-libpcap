@@ -24,6 +24,8 @@ mutex routeTableMutex;
 map<uint32_t, DistVectorEntry> distVector; 
 mutex distVectorMutex;
 
+typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
+IPPacketReceiveCallback ipReceiveCallback = nullptr;
 
 int verbose=1; 
 #define V1 if(verbose>=1)
@@ -70,9 +72,9 @@ int queryRouteTable(RouteTableEntry &res, uint32_t ip) {
     for (auto x : routeTable) {
         V2 printf("[Info] Route table entry (dest=%s,mask=%s)\n", ipv4_int_to_string(x.dest.s_addr, nullptr).c_str(),
             ipv4_int_to_string(x.mask.s_addr, nullptr).c_str());
-        printf("[Info] %x,%x,(mask=%x)\n", ip, x.dest.s_addr, x.mask.s_addr);
-        uint32_t eip = ntohl(x.dest.s_addr), eMask = x.mask.s_addr;
-        if (eip == (ip&eMask) && eMask > resMask) {
+        uint32_t eIp = ip, eDst = ntohl(x.dest.s_addr), eMask = x.mask.s_addr;
+        printf("[Info] ip=%x,dst=%x,mask=%x\n", eIp, eDst, eMask);
+        if (eIp == (eDst&eMask) && eMask > resMask) {
             resMask = eMask;
             res = x; 
         }
@@ -83,14 +85,30 @@ int queryRouteTable(RouteTableEntry &res, uint32_t ip) {
 int routeIPPacket(const void *buf, int len, std::optional<string> portName = std::nullopt) {
     if (!portName) {
         RouteTableEntry e;
-        int res = queryRouteTable(e, ((ip_header_t *)buf)->dst_addr);
-        printf("%x\n", ((ip_header_t *)buf)->dst_addr);
+        auto hdr = (ip_header_t*)(buf);
+        if (--hdr->ttl == 0) {
+            printf("[Info] Packet dropped due to 0 ttl.\n");
+            return 0;
+        }
+        int res = queryRouteTable(e, hdr->dst_addr);
+        printf("[Info] Packet dst addr = %x\n", ((ip_header_t *)buf)->dst_addr);
         if (res == 0)
         {
-            V1 printf("[Info] Drop IP packet due to failed to find respective route table entry\n");
-            return -1;
+            auto ip = ((ip_header_t *)buf)->dst_addr;
+            printf("[Info] count = %lu\n", distVector.count(ip));
+            if (distVector.count(ip) && distVector[ip].distance == 0) {
+                printf("[Info] Packet is for me, call ip call back.\n");
+                ipReceiveCallback(buf, len);
+                return 0;
+            }
+            else
+            {
+                V1 printf("[Info] Drop IP packet due to failed to find respective route table entry\n");
+                return -1;
+            }
         }
         sendFrame(buf, len, IPV4_ETHER_TYPE, e.nextHopMAC, e.deviceName);
+        printf("[Info] frame sent.\n");
     } else {
         mac_t mac = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; 
         sendFrame(buf, len, IPV4_ETHER_TYPE, mac, portName.value());
@@ -233,8 +251,6 @@ int updateDistVecTable(const map<uint32_t, DistVectorEntry> &m, string device) {
     return 0;
 }
 
-typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
-IPPacketReceiveCallback ipReceiveCallback = nullptr;
 
 int setIPPacketReceiveCallback(IPPacketReceiveCallback callback)
 {
@@ -250,9 +266,7 @@ int receiveIPPacketEtherWrapper(const void * packet, int len, string from) {
         updateDistVecTable(r, from); 
         return 0;
     } else {
-        ip_header_t *header_ip = (ip_header_t*)((char*)packet + ETH_HLEN); 
-        sendIPPacket(header_ip->src_addr, header_ip->dst_addr, header_ip->protocol, header_ip + ETH_HLEN, len - ETH_HLEN - IP_HEADER_LEN);
-        return ipReceiveCallback ? ipReceiveCallback((char*)packet + ETH_HLEN, len) : 0; 
+        return routeIPPacket((void*)((char*)packet + ETH_HLEN), len - ETH_HLEN); 
     }
 }
 vector<std::future<int>> initLegalPort(int cnt) {
