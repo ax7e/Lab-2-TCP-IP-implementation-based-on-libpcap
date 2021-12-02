@@ -139,6 +139,11 @@ int addDevice(string device) {
         printf("[Error] %s\n", errbuf); 
         return -1;
     }
+   	if (pcap_set_timeout(ptr, PACKET_TIMEOUT) != 0) {
+        printf("[Error] %s\n", errbuf); 
+        return -1;
+    }
+
     auto tmp = pcap_set_immediate_mode(ptr, 1);
     if (tmp != 0) {
         printf("[Error] Set Immediate Mode.\n"); 
@@ -149,10 +154,10 @@ int addDevice(string device) {
         return -1;
     }
 
-    printf("[Info] Activation succeed!\n");
+    printf("[\e[32mInfo\e[0m] Activation succeed!\n");
     getIDCache()[device] = (Info){ptr,nullptr,0};
     int res = getMACAddress(device.c_str(), getIDCache()[device].mac);
-    printf("[Info] Successfully fetched MAC address!\n");
+    printf("[\e[32mInfo\e[0m] Successfully fetched MAC address!\n");
     if (res != 0) {
         printf("[Error] Failed to get MAC address\n");
     }
@@ -162,19 +167,22 @@ int addDevice(string device) {
 std::future<int> activateListen(string id, int cnt = 0) {
     pcap_t* handle = getIDCache()[id].handle;
     auto callback = getIDCache()[id].callback;
-    printf("[Info] Listen thread of port %s begins. \n", id.c_str()); 
+    printf("[\e[32mInfo\e[0m] Listen thread of port %s begins. \n", id.c_str()); 
     return std::async([=](int cnt){
         int res; 
         do {
             pcap_pkthdr *hdr; 
             const u_char *data; 
             res = pcap_next_ex(handle, &hdr, &data);
-            callback(data, hdr->caplen, id);  
+            if (res == 1) callback(data, hdr->caplen, id);  
             cnt = cnt - 1; 
             std::this_thread::sleep_for(std::chrono::milliseconds(20)); 
-        } while (res != PCAP_ERROR && cnt != 0);
+        } while (res != PCAP_ERROR && cnt != 0 && socketCount != 0);
+        printf("[\e[32mInfo\e[0m] Listen thread of port %s ends. \n", id.c_str()); 
         if (res == PCAP_ERROR || cnt != 0) return -1; 
         return 0; 
     }, cnt);
 }
 
+
+std::atomic<int> socketCount;

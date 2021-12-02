@@ -61,3 +61,4 @@ struct Info {
 std::map<string, Info>& getIDCache();
 
 int getMACAddress(const char *name, u_char *dst);
+extern std::atomic<int> socketCount;

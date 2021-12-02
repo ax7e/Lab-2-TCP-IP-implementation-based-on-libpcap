@@ -1,4 +1,5 @@
 #pragma once
+#define PACKET_TIMEOUT 500
 
 #define IPV4_ETHER_TYPE 0x08
 /**

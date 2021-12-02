@@ -17,7 +17,8 @@ add_library(unp
     tcp/unp.h
 )
 # set (LIB_WRAPS "-Wl,--wrap=bind,--wrap=listen,--wrap=connect,--wrap=accept,--wrap=bind,--wrap=read,--wrap=close,--wrap=getaddrinfo" tcp_lib)
-set(LIB_WRAPS "-Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo" tcp_lib unp)
+# set(LIB_WRAPS "-Wl,--wrap=bind,--wrap=listen,--wrap=connect,--wrap=accept,--wrap=bind,--wrap=read,--wrap=close,--wrap=getaddrinfo" tcp_lib unp)
+set(LIB_WRAPS "-Wl,--wrap=freeaddrinfo,--wrap=getaddrinfo" tcp_lib unp)
 
 
 add_executable(echo_client tcp/echo_client.cpp)

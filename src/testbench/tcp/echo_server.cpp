@@ -4,6 +4,7 @@
 //
 
 #include "unp.h"
+#include "src/tcp/socket.h"
 
 void str_echo(int sockfd, int sleep_) {
   ssize_t n;

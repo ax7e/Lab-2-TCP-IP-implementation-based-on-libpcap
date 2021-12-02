@@ -1,5 +1,6 @@
 #include "ip_route.h"
 #include <cassert>
+#include <iostream>
 #include "ip.h"
 #include "src/link/link.h"
 #include <netinet/ip.h>
@@ -28,8 +29,6 @@ typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
 IPPacketReceiveCallback ipReceiveCallback = nullptr;
 
 int verbose=1; 
-#define V1 if(verbose>=1)
-#define V2 if(verbose>=2)
 
 bool operator<(const RouteTableEntry &lhs, const RouteTableEntry &rhs) {
     return lhs.dest.s_addr == rhs.dest.s_addr ? lhs.mask.s_addr < rhs.mask.s_addr : lhs.dest.s_addr < rhs.dest.s_addr;
@@ -70,10 +69,10 @@ int queryRouteTable(RouteTableEntry &res, uint32_t ip) {
     std::lock_guard<std::mutex> guard(routeTableMutex);
     uint32_t resMask = 0; 
     for (auto x : routeTable) {
-        V2 printf("[Info] Route table entry (dest=%s,mask=%s)\n", ipv4_int_to_string(x.dest.s_addr, nullptr).c_str(),
+        V2 printf("[\e[32mInfo\e[0m] Route table entry (dest=%s,mask=%s)\n", ipv4_int_to_string(x.dest.s_addr, nullptr).c_str(),
             ipv4_int_to_string(x.mask.s_addr, nullptr).c_str());
         uint32_t eIp = ip, eDst = ntohl(x.dest.s_addr), eMask = x.mask.s_addr;
-        printf("[Info] ip=%x,dst=%x,mask=%x\n", eIp, eDst, eMask);
+        V2 printf("[\e[32mInfo\e[0m] ip=%x,dst=%x,mask=%x\n", eIp, eDst, eMask);
         if (eIp == (eDst&eMask) && eMask > resMask) {
             resMask = eMask;
             res = x; 
@@ -87,28 +86,28 @@ int routeIPPacket(const void *buf, int len, std::optional<string> portName = std
         RouteTableEntry e;
         auto hdr = (ip_header_t*)(buf);
         if (--hdr->ttl == 0) {
-            printf("[Info] Packet dropped due to 0 ttl.\n");
+            V1 printf("[\e[32mInfo\e[0m] Packet dropped due to 0 ttl.\n");
             return 0;
         }
         int res = queryRouteTable(e, hdr->dst_addr);
-        printf("[Info] Packet dst addr = %x\n", ((ip_header_t *)buf)->dst_addr);
+        V2 printf("[\e[32mInfo\e[0m] Packet dst addr = %x\n", ((ip_header_t *)buf)->dst_addr);
         if (res == 0)
         {
             auto ip = ((ip_header_t *)buf)->dst_addr;
-            printf("[Info] count = %lu\n", distVector.count(ip));
+            V2 printf("[\e[32mInfo\e[0m] count = %lu\n", distVector.count(ip));
             if (distVector.count(ip) && distVector[ip].distance == 0) {
-                printf("[Info] Packet is for me, call ip call back.\n");
+                V2 printf("[\e[32mInfo\e[0m] Packet is for me, call ip call back.\n");
                 ipReceiveCallback(buf, len);
                 return 0;
             }
             else
             {
-                V1 printf("[Info] Drop IP packet due to failed to find respective route table entry\n");
+                V1 printf("[\e[32mInfo\e[0m] Drop IP packet due to failed to find respective route table entry\n");
                 return -1;
             }
         }
         sendFrame(buf, len, IPV4_ETHER_TYPE, e.nextHopMAC, e.deviceName);
-        printf("[Info] frame sent.\n");
+        V2 printf("[\e[32mInfo\e[0m] frame sent.\n");
     } else {
         mac_t mac = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; 
         sendFrame(buf, len, IPV4_ETHER_TYPE, mac, portName.value());
@@ -133,7 +132,7 @@ int sendIPPacket(const uint32_t src, const uint32_t dest,
     header->checksum = 0; 
     header->checksum = calcChecksum(buf); 
     memcpy(buf+IP_HEADER_LEN, data, len);
-    V2 printf("[Info] IP packet, len + IP header len = %d\n", len + IP_HEADER_LEN);
+    V2 printf("[\e[32mInfo\e[0m] IP packet, len + IP header len = %d\n", len + IP_HEADER_LEN);
     return routeIPPacket(buf, len + IP_HEADER_LEN, portName);
 }
 
@@ -176,14 +175,14 @@ void updateDistVecEntry(const uint32_t ip, DistVectorEntry e, string device)
             debugUpdateHappend |= e.distance != e0.distance; 
             e0 = e;
             setRoutingTable((in_addr){htonl(ip)}, (in_addr){htonl(0xFFFFFFFF)},e.nextHopMAC,device);
-            V2 printf("[Info] Set type 1.\n");
+            V2 printf("[\e[32mInfo\e[0m] Set type 1.\n");
         } 
     }
     else
     {
         distVector[ip] = e;
         setRoutingTable((in_addr){htonl(ip)}, (in_addr){htonl(0xFFFFFFFF)},e.nextHopMAC,device);
-        V2 printf("[Info] Set type 2.\n");
+        V2 printf("[\e[32mInfo\e[0m] Set type 2.\n");
         debugUpdateHappend = 1;
     }
 }
@@ -198,18 +197,18 @@ bool containsDistVec(const void *packet, int len) {
 
 void debugDistVector(const map<uint32_t, DistVectorEntry> &v)
 {
-    V1 printf("[Info] Dist Vector:\n");
+    V2 printf("[\e[32mInfo\e[0m] Dist Vector:\n");
     for (auto e : v) 
     {
         uint32_t ip = e.first;
-        V1 printf("[Info] Vector Entry (%x)%d.%d.%d.%d, ", ip, (ip>>24)&0xFF,(ip>>16)&0xFF,(ip>>8)&0xFF,(ip>>0)&0xFF); 
-        for (int j = 0;j < 6; ++j) printf("%02x%c", e.second.nextHopMAC[j], ":,"[j==5]); 
-        printf("%d\n", e.second.distance);
+        V2 printf("[\e[32mInfo\e[0m] Vector Entry (%x)%d.%d.%d.%d, ", ip, (ip>>24)&0xFF,(ip>>16)&0xFF,(ip>>8)&0xFF,(ip>>0)&0xFF); 
+        for (int j = 0;j < 6; ++j) V2 printf("%02x%c", e.second.nextHopMAC[j], ":,"[j==5]); 
+        V2 printf("%d\n", e.second.distance);
     }
 }
 
 map<uint32_t, DistVectorEntry> parseDistVec(char *packet, int len) {
-    V2 printf("[Info] parseDistVec.\n");
+    V2 printf("[\e[32mInfo\e[0m] parseDistVec.\n");
     char *p = packet + ETH_HLEN + IP_HEADER_LEN + PREMBLE_LEN; 
     assert(len >= ETH_HLEN + IP_HEADER_LEN + PREMBLE_LEN);
     map<uint32_t, DistVectorEntry> v; 
@@ -245,8 +244,8 @@ int updateDistVecTable(const map<uint32_t, DistVectorEntry> &m, string device) {
     uint64_t mac = 0; 
     memcpy(&mac, m.begin()->second.nextHopMAC, 6); 
     timeOutTable[mac] = clk::now(); 
-    V2 printf("[Info] Set %lx\n", mac); 
-    V2 printf("[Info] Updated dist vector.\n");
+    V2 printf("[\e[32mInfo\e[0m] Set %lx\n", mac); 
+    V2 printf("[\e[32mInfo\e[0m] Updated dist vector.\n");
     if (debugUpdateHappend) debugDistVector(distVector);
     return 0;
 }
@@ -259,9 +258,9 @@ int setIPPacketReceiveCallback(IPPacketReceiveCallback callback)
 }
 
 int receiveIPPacketEtherWrapper(const void * packet, int len, string from) {
-    V2 printf("[Info] received ether packet called at port %s.\n", from.c_str());
+    V2 printf("[\e[32mInfo\e[0m] received ether packet called at port %s.\n", from.c_str());
     if (containsDistVec(packet, len)){
-        V2 printf("[Info] Detected DV broadcast at port %s\n", from.c_str()); 
+        V2 printf("[\e[32mInfo\e[0m] Detected DV broadcast at port %s\n", from.c_str()); 
         auto r = parseDistVec((char*)packet, len); 
         updateDistVecTable(r, from); 
         return 0;
@@ -276,9 +275,9 @@ vector<std::future<int>> initLegalPort(int cnt) {
     {
         addDevice(x);
         setFrameReceiveCallback(x, receiveIPPacketEtherWrapper);
-        V2 printf("[Info] Before actiave listen on %s\n", x.c_str()); 
+        V2 printf("[\e[32mInfo\e[0m] Before actiave listen on %s\n", x.c_str()); 
         res.push_back(activateListen(x, cnt));
-        V2 printf("[Info] End actiave listen on %s\n", x.c_str()); 
+        V2 printf("[\e[32mInfo\e[0m] End actiave listen on %s\n", x.c_str()); 
     }
     return res;
 }
@@ -297,7 +296,7 @@ void checkDVTimeOut() {
         }
     }
     if (toDel.size()) {
-        printf("[Info] Timeout happened and deleted.\n");
+        printf("[\e[32mInfo\e[0m] Timeout happened and deleted.\n");
         decltype(distVector) n;
         for (auto e:distVector) {
             uint64_t mac;
@@ -312,7 +311,7 @@ void checkDVTimeOut() {
 
 vector<std::future<int>> initRouteService(int cnt) {
     auto f_r = initLegalPort(cnt); 
-    V2 printf("[Info] Init legal port finished!\n"); 
+    V2 printf("[\e[32mInfo\e[0m] Init legal port finished!\n"); 
     auto r = getLegalPortName(); 
     std::lock_guard<std::mutex> guard(distVectorMutex); 
     for (auto local_host : r) {
@@ -326,11 +325,13 @@ vector<std::future<int>> initRouteService(int cnt) {
     debugDistVector(distVector); 
     //Thread responsible for broadcast of the distance vector.
     f_r.push_back(std::async([=](int cnt){
-        while (cnt --) {
-            V2 printf("[Info] Cnt = %d now.\n", cnt);
+        V1 printf("[\e[32mInfo\e[0m] DV thread "); 
+        V1 std::cout << std::this_thread::get_id() << std::endl; 
+        while (cnt -- && socketCount != 0) {
+            V2 printf("[\e[32mInfo\e[0m] Cnt = %d now.\n", cnt);
             V2 debugDistVector(distVector); 
             for (auto local_host : r) {
-                V2 printf("[Info] send dist packet to port %s\n", local_host.c_str());
+                V2 printf("[\e[32mInfo\e[0m] send dist packet to port %s\n", local_host.c_str());
                 std::lock_guard<std::mutex> guard(distVectorMutex);
                 //src,dst,proto,data,len
                 in_addr src, dst;
@@ -346,6 +347,8 @@ vector<std::future<int>> initRouteService(int cnt) {
             if (cnt % 10 == 9) V1 debugDistVector(distVector) ;
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
+        V1 printf("[\e[32mInfo\e[0m] Ends DV thread "); 
+        V1 std::cout << std::this_thread::get_id() << std::endl; 
         return 0; 
     }, cnt));
     return f_r; 

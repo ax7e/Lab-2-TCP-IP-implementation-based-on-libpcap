@@ -31,7 +31,7 @@ int main(int argc, char *argv[])
     int i = t.get();
     if (i == 0)
     {
-        printf("[Info] Process exited successfully\n");
+        printf("[\e[32mInfo\e[0m] Process exited successfully\n");
     }
     else
     {
