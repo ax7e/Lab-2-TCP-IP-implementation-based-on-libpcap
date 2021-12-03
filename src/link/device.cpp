@@ -101,7 +101,6 @@ vector<string> getLegalPortName() {
                 switch(type) {
                     case AF_INET:
                         res.push_back(string(i->name)); 
-
                 }
             }
         }

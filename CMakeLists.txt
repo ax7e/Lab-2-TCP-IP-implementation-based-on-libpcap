@@ -12,9 +12,11 @@ include(envs/pcap-config.cmake)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-set(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -lpcap -lpthread -O0 -Wall -Wno-sign-compare -ggdb3 -DZDEBUG -Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo")
-set(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -lpcap -lpthread -O2 -Wall -Wno-sign-compare -Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo")
-
+# set(LIB_WRAPS "-Wl,--wrap=bind,--wrap=listen,--wrap=connect,--wrap=accept,--wrap=bind,--wrap=read,--wrap=close,--wrap=getaddrinfo" tcp_lib unp)
+# set (WRAP "-Wl,--wrap=write,--wrap=listen,--wrap=connect,--wrap=accept,--wrap=bind,--wrap=read,--wrap=close,--wrap=getaddrinfo,--wrap=socket")
+set (WRAP "")
+set(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -lpcap -lpthread -O0 -Wall -Wno-sign-compare -ggdb3 -DZDEBUG ${WRAP}")
+set(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -lpcap -lpthread -O2 -Wall -Wno-sign-compare ${WRAP}")
 include_directories(PUBLIC "${PROJECT_SOURCE_DIR}")
 
 add_library(link_lib

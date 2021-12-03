@@ -50,6 +50,7 @@ void cli_client(const char* addr, int sleep_) {
   FILE* fp;
 
   sockfd = Socket(AF_INET, SOCK_STREAM, 0);
+  printf("[Info] Socket created.\n"); 
   bzero(&servaddr, sizeof(servaddr));
   servaddr.sin_family = AF_INET;
   servaddr.sin_port = htons(10086);
@@ -70,6 +71,7 @@ void cli_client(const char* addr, int sleep_) {
 int main(int argc, char *argv[]) {
   int loop;
   
+  printf("[Info] Hello world.\n"); 
   if (argc != 2) {
     printf("usage: %s <IPaddress>\n", argv[0]);
     return -1;

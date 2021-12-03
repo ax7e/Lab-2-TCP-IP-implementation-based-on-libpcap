@@ -3,6 +3,7 @@
 //
 
 #include "unp.h"
+#include "src/tcp/socket.h"
 
 void str_echo(int sockfd) {
   ssize_t n;

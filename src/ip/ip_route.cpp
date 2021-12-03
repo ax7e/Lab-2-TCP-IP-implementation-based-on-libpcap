@@ -28,7 +28,7 @@ mutex distVectorMutex;
 typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
 IPPacketReceiveCallback ipReceiveCallback = nullptr;
 
-int verbose=1; 
+int verbose=0; 
 
 bool operator<(const RouteTableEntry &lhs, const RouteTableEntry &rhs) {
     return lhs.dest.s_addr == rhs.dest.s_addr ? lhs.mask.s_addr < rhs.mask.s_addr : lhs.dest.s_addr < rhs.dest.s_addr;
@@ -289,7 +289,7 @@ void checkDVTimeOut() {
         uint64_t mac = 0;
         memcpy(&mac, e.second.nextHopMAC, 6);
         auto t = duration_cast<std::chrono::milliseconds>(clk::now()-timeOutTable[mac]).count();
-        V2 printf("Timeout for %lx=%ld\n", mac, t);  
+        V2 printf("[\e[3:mInfo\e[0m] Timeout for %lx=%ld\n", mac, t);  
         if (t > TIMEOUT)
         {
             toDel.insert(mac); 

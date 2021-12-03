@@ -32,8 +32,6 @@ void str_echo(int sockfd, int sleep_) {
 int main(int argc, char *argv[]) {
   struct sockaddr_in cliaddr, servaddr;
   int listenfd = Socket(AF_INET, SOCK_STREAM, 0);
-  int optval;
-  int rv;
   int connfd;
   int loop;
   
@@ -43,12 +41,6 @@ int main(int argc, char *argv[]) {
   servaddr.sin_port = htons(10086);
 
   Bind(listenfd, (struct sockaddr *) &servaddr, sizeof(servaddr));
-  optval = 1;
-  rv = setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR,
-                      (const void *) &optval, sizeof(int));
-  if (rv < 0) {
-    printf("%s\n", strerror(errno));
-  }
   Listen(listenfd, SOMAXCONN);
 
   for (loop = 0; loop < 3; loop++) {

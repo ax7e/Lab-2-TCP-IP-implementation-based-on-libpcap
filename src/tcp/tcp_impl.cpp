@@ -11,7 +11,8 @@
 #include <cstring>
 #include "tcp_impl.h"
 #include "src/ip/ip.h"
-#include "src/tcp/socket.h"
+#include "socket.h"
+using std::make_shared;
 
 struct tcp_header_t {
     uint16_t srcPort;
@@ -40,6 +41,8 @@ enum struct TCPState {
     TIMEWAIT
 };
 
+uint32_t getAnyIP(); 
+
 string to_string(TCPState state) {
 #define BRANCH(x) if(state==TCPState::x)return #x;
     BRANCH(CLOSED)
@@ -58,9 +61,9 @@ string to_string(TCPState state) {
 
 struct tcp_id_t {
     int srcPort;
-    //In network form
+    //In host form
     uint32_t srcIP;
-    //In network form
+    //In host form
     uint32_t dstIP;
     int dstPort;
     tcp_id_t() = default;
@@ -93,10 +96,10 @@ void debugTCPPacket(const void *buf, int len, bool hasIP = true) {
     } else {
         V1 printf("[\e[32mInfo\e[0m] (%d<->%d),", ntohs(header->srcPort), ntohs(header->dstPort)); 
     }
-    printf("(len:%d,ack:%d,seq:%d,window:%d,checksum:%x), ",len- TCP_HEADER_LEN-(hasIP?IP_HEADER_LEN:0), 
+    V1 printf("(len:%d,ack:%d,seq:%d,window:%d,checksum:%x), ",len- TCP_HEADER_LEN-(hasIP?IP_HEADER_LEN:0), 
         ntohl(header->ack),ntohl(header->seq),header->window,header->checksum);
     V1 printf("Flags:");
-#define CHECK_FLAG(x) if (header->flags&TCP_FLAG_##x){printf(#x);putchar(' ');}
+#define CHECK_FLAG(x) V1 if(header->flags&TCP_FLAG_##x){printf(#x);putchar(' ');}
     CHECK_FLAG(URG)
     CHECK_FLAG(ACK)
     CHECK_FLAG(PSH)
@@ -106,6 +109,8 @@ void debugTCPPacket(const void *buf, int len, bool hasIP = true) {
     V1 puts("");
 }
 
+struct TCB;
+void tcpSenderThread(TCB &c);
 struct TCB {
     std::thread thread;
     TCPState state;
@@ -128,33 +133,38 @@ struct TCB {
      *  1. connection not established, buffer the request
      *  2. connection established, buffer the request and process
      *  3. sender closed, do not buffer new data, but still answer user using the old data
+     * @return future<int> which contains the bytes received
      */
     std::future<int> readData(char *buf, int len) {
         static const std::set<TCPState> ill = { TCPState::CLOSEING, TCPState::LAST_ACK, TCPState::TIMEWAIT, TCPState::CLOSED };
+        V1 printf("[\e[32mInfo\e[0m] readData.\n");
         std::lock_guard<std::mutex> lock(mutex); 
-        V2 printf("[\e[32mInfo\e[0m] Lock!.\n");
+        V2 printf("[\e[32mInfo\e[0m] \e[31mLock!\e[0m.\n");
         std::promise<int> pro;
         auto f = pro.get_future();
         if (ill.count(state)) {
             pro.set_value(-1); 
             return f;
         }
+        V1 printf("[Info] push_back.\n"); 
         rcv_requests.push_back(std::make_tuple(buf, len, std::move(pro)));
         clrRcvBuf(); 
-        V2 printf("[\e[32mInfo\e[0m] Unlock!.\n");
+        V2 printf("[\e[32mInfo\e[0m] Un\e[31mLock!\e[0m, %llx\n", &mutex);
         return f;
     }
     void clrRcvBuf() {
-        V2 printf("[\e[32mInfo\e[0m] clrRcvBuf.\n"); 
+        int s = rcv_buf.size(); 
+        V2 printf("[\e[32mInfo\e[0m] clrRcvBuf, size = %d[%d,%d).\n", (int)rcv_requests.size(),rcv_buf_p,s); 
         static const std::set<TCPState> ill = { TCPState::CLOSEING, TCPState::LAST_ACK, TCPState::TIMEWAIT, TCPState::CLOSED,
             TCPState::CLOSE_WAIT};
-        int s = rcv_buf.size(); 
-        while (!rcv_requests.empty() && s - rcv_buf_p >= std::get<1>(rcv_requests.front())) {
-            V2 printf("[\e[32mInfo\e[0m] \e[33m putvalue \e[0m %c\n", rcv_buf[rcv_buf_p]);
+        while (!rcv_requests.empty()) {
+            int len = std::get<1>(rcv_requests.front());
+            len = std::min(len, s-rcv_buf_p);
+            if(!len)break;
             memcpy(std::get<0>(rcv_requests.front()),
-                   &rcv_buf[rcv_buf_p], std::get<1>(rcv_requests.front()));
-            std::get<2>(rcv_requests.front()).set_value(0);
-            rcv_buf_p += std::get<1>(rcv_requests.front()); 
+                   &rcv_buf[rcv_buf_p], len);
+            std::get<2>(rcv_requests.front()).set_value(len); 
+            rcv_buf_p += len;
             rcv_requests.pop_front();
         }
         //No furthur incoming packet, release all the request.
@@ -171,7 +181,18 @@ struct TCB {
     //TODO : NOT IMPLEMENTED
     int rcv_wnd;
     std::mutex mutex;
-    bool legalToSend() { 
+    TCB()
+    {
+        sendBuffer = new uint8_t[TCP_SEND_BUFFER_SIZE << 1];
+        snd_una = snd_sqn = snd_nxt = snd_iss = rand();
+        thread = std::thread(tcpSenderThread, std::ref(*this));
+        rcv_buf_p = 0;
+        state = TCPState::CLOSED;
+        snd_wnd = TCP_SEND_BUFFER_SIZE * 2;
+        V2 printf("[\e[32mInfo\e[0m] Init finished, snd_sqn = %d, snd_iss = %d\n", snd_sqn, snd_iss);
+    }
+    bool legalToSend()
+    {
         //TODO: User should be able to send a syn request under listen state according to RFC 793
         static const std::set<TCPState> legal = { TCPState::ESTAB, TCPState::CLOSE_WAIT, 
             TCPState::SYN_SENT, TCPState::SYN_RCVD}; 
@@ -208,21 +229,46 @@ struct TCB {
         }
     }
     void pushReceiveBuffer(char *buf, int len) {
+        V1 printf("[Info] push lne = %d\n", len);
         checkShrink(); 
         for (int i = 0;i < len;++i) rcv_buf.push_back(buf[i]); 
         clrRcvBuf(); 
     }
     
     int sendPacket(const void *buf, int len, uint8_t flags = TCP_FLAG_ACK, bool imme = false) {
-        std::lock_guard<std::mutex> g(mutex);
-        V2 printf("[\e[32mInfo\e[0m] lock!.\n");
-        if (!legalToSend()) {
-            printf("[Err] Try to send packet in closed TCP state machine.\n"); 
-            return -1;
+        do {
+            int x = std::min(len, TCP_MAX_PACKET_LENGTH);
+            _sendPacket(buf, x, flags, imme);
+            buf = (void*)((char*)buf)+x; len -= x;
+        } while (len > TCP_MAX_PACKET_LENGTH);
+    }
+    int _sendPacket(const void *buf, int len, uint8_t flags = TCP_FLAG_ACK, bool imme = false) {
+        V1 printf("[\e[32mInfo\e[0m] \e[31mSend Packet, len = %d\e[0m.\n", len);
+        //TODO:Dirt
+        imme = true;
+        int mark;
+        {
+            std::lock_guard<std::mutex> g(mutex);
+            V2 printf("[\e[32mInfo\e[0m] \e[31mLock!\e[0m %llx.\n", &mutex);
+            if (!legalToSend())
+            {
+                printf("[Err] Try to send packet in closed TCP state machine.\n");
+                return -1;
+            }
+            mark = snd_sqn + len;
+            __sendPacket(buf, len, flags, imme);
+            V2 printf("[\e[32mInfo\e[0m] Un\e[31mLock!\e[0m, %llx\n", &mutex);
         }
-        __sendPacket(buf, len, flags, imme);
-        V2 printf("[\e[32mInfo\e[0m] unlock!.\n");
-        return 0; 
+        do {
+            V1 printf("[\e[32mInfo\e[0m]Wait for ack.\n"); 
+            {
+                std::lock_guard<std::mutex> g(mutex);
+                if (snd_nxt >= mark) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        } while (true);
+        V1 printf("[\e[32mInfo\e[0m]Send ok.\n"); 
+        return len; 
     }
     /**
      * @brief Call Ether interface to send packet. (shouldn't have a lock)
@@ -253,10 +299,15 @@ struct TCB {
         if (len) {
             memcpy(sendBuffer + snd_sqn - snd_iss, buf, len);
         }
-        snd_sqn += len != 0 ? len : (bool)((flags & TCP_FLAG_SYN) || (flags & TCP_FLAG_FIN));
         if (imme) {
+            V2 printf("[\e[32mInfo\e[0m] Before construct.\n"); 
             constructTCPPacket(buf, len, flags);
             snd_nxt += len;
+        }
+        snd_sqn += len;
+        if ((flags & TCP_FLAG_SYN) || (flags & TCP_FLAG_FIN)) {
+            snd_sqn += 1; 
+            snd_nxt += 1;
         }
         return 0;
     }
@@ -280,7 +331,7 @@ struct TCB {
         fakeHeader.dst_addr = socket.dstIP;
         fakeHeader.protocol = PROTO_TCP;
         calcTCPChecksum(fakeHeader, obuf, len);
-        V1 printf("[\e[32mInfo\e[0m] Send packet content:\n");
+        V1 printf("[\e[32mInfo\e[0m] (src:%x,dst:%x) Send packet content:\n", socket.srcIP, socket.dstIP);
         debugTCPPacket(obuf, len + TCP_HEADER_LEN, false); 
         if (sendIPPacket(socket.srcIP, socket.dstIP, PROTO_TCP, obuf, len + TCP_HEADER_LEN)) {
             printf("[Err] sendPacket failed at sendIPPacket.\n");
@@ -309,14 +360,16 @@ struct TCB {
         header->checksum = ~sum;
     }
     ~TCB(){
+        V1 printf("[\e[31mInfo\e[0m] Free TCB.\n"); 
         thread.join();
+        delete sendBuffer;
     }
     int sendFlag(uint8_t flag) {
         return __sendPacket(nullptr, 0, flag, true);
     }
     void sendCloseSignal() {
         std::lock_guard<std::mutex> lock(mutex);
-        V2 printf("[\e[32mInfo\e[0m] lock!.\n");
+        V2 printf("[\e[32mInfo\e[0m] \e[31mLock!\e[0m.\n");
         V2 printf("[\e[32mInfo\e[0m] CLOSE \e[31mstate\e[0m = %s\n", to_string(state).c_str());
         switch (state)
         {
@@ -351,14 +404,14 @@ struct TCB {
             exit(-1); 
             break;
         }
-        V2 printf("[\e[32mInfo\e[0m] Now \e[31mstate\e[0m = %s\n", to_string(state).c_str());
-        V2 printf("[\e[32mInfo\e[0m] unlock!.\n");
+        V2 printf("[\e[32mInfo\e[0m] Now \e[31mstate\e[0m = %s[sndnxt:%d,sqn:%d)\n", to_string(state).c_str(),snd_nxt,snd_sqn);
+        V2 printf("[\e[32mInfo\e[0m] un\e[31mLock!\e[0m %llx\n", &mutex);
     }
     void processTCPStateMachineOnReceive(const void *buf, int len)
     {
         std::lock_guard<std::mutex> lock(mutex);
-        V2 printf("[\e[32mInfo\e[0m] lock!.\n");
-        V1 printf("[\e[32mInfo\e[0m] Before \e[31m state \e[0m = %s, len = %d\n", to_string(state).c_str(), len);
+        V2 printf("[\e[32mInfo\e[0m] \e[31mLock!\e[0m.\n");
+        V1 printf("[\e[32mInfo\e[0m] Before \e[31m state \e[0m = %s, len = %d, rcv = %d\n", to_string(state).c_str(), len,rcv_nxt);
         tcp_header_t *hdr = (tcp_header_t *)((char*)buf+IP_HEADER_LEN);
         auto syn = [&]
         { return (HAS_FLAG(hdr->flags, TCP_FLAG_SYN)); };
@@ -366,7 +419,7 @@ struct TCB {
         { return (HAS_FLAG(hdr->flags, TCP_FLAG_ACK)); };
         auto valid_ack = [&]
         { 
-            return ack() && ntohl(hdr->ack) == snd_sqn + 1; 
+            return ack() && ntohl(hdr->ack) == snd_sqn; 
         };
         auto fin = [&]
         { return (HAS_FLAG(hdr->flags, TCP_FLAG_FIN)); };
@@ -455,6 +508,7 @@ struct TCB {
                 t.detach();
             }
         receivePacket:
+            V1 printf("[Info] rcv packet: seq:%d,rcvnxt:%d\n", htonl(hdr->seq), rcv_nxt); 
             if (htonl(hdr->seq) == rcv_nxt) {
                 rcv_nxt += len - TCP_HEADER_LEN - IP_HEADER_LEN;
                 V2 printf("[\e[32mInfo\e[0m] Received packet of {len=%d}[%d,%d).\n",
@@ -464,14 +518,17 @@ struct TCB {
                 if (htonl(hdr->ack) > snd_una) {
                     snd_una = htonl(hdr->ack);
                 }
+                if (len - TCP_HEADER_LEN - IP_HEADER_LEN > 0) {
+                    sendFlag(TCP_FLAG_ACK); 
+                }
             }
         }
-        V1 printf("[\e[32mInfo\e[0m] Now \e[31m state \e[0m = %s\n", to_string(state).c_str());
-        V2 printf("[\e[32mInfo\e[0m] unlock!.\n");
+        V1 printf("[\e[32mInfo\e[0m] Now \e[31mstate\e[0m = %s[sndnxt:%d,sqn:%d)\n", to_string(state).c_str(),snd_nxt,snd_sqn);
+        V2 printf("[\e[32mInfo\e[0m] Un\e[31mLock!\e[0m, %llx\n", &mutex);
     }
     int startConnection() {
         std::lock_guard<std::mutex> lock(mutex);
-        V2 printf("[\e[32mInfo\e[0m] lock!.\n");
+        V2 printf("[\e[32mInfo\e[0m] \e[31mLock!\e[0m.\n");
         if (state != TCPState::CLOSED) {
             printf("[Err] Try to start connection on not closed TCB.\n");
             return -1;
@@ -479,10 +536,9 @@ struct TCB {
         V2 printf("[\e[32mInfo\e[0m] Start connection snd_sqn = %d, snd_iss = %d.\n", snd_sqn, snd_iss);
         auto t = sendFlag(TCP_FLAG_SYN);
         snd_nxt += 1;
-        printf("%d,%d\n", snd_sqn, snd_nxt);
         fflush(stdout);
         state = TCPState::SYN_SENT;
-        V2 printf("[\e[32mInfo\e[0m] lock!.\n");
+        V2 printf("[\e[32mInfo\e[0m] \e[31mLock!\e[0m.\n");
         return t;
     }
     
@@ -502,14 +558,25 @@ struct TCB {
         return state == TCPState::ESTAB; 
     }
     void init();
+    void waitUntil(TCPState s) {
+        do {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (state == s) break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20)); 
+        } while(true);
+    } 
 };
 void tcpSenderThread(TCB &c)
 {
     while (true)
     {
         {
+            V2 printf("[Info] send thread beats.\n");
             std::lock_guard<std::mutex> lock(c.mutex);
             c.clearBufferedTCPPacket();
+            c.clrRcvBuf();
             if (c.state == TCPState::CLOSED) break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -518,19 +585,7 @@ void tcpSenderThread(TCB &c)
 
 void TCB::init()
 {
-    sendBuffer = new uint8_t[TCP_SEND_BUFFER_SIZE << 1];
-    snd_una = snd_sqn = snd_nxt = snd_iss = rand();
-    thread = std::thread(tcpSenderThread, std::ref(*this));
-    rcv_buf_p = 0;
-    state = TCPState::CLOSED;
-    snd_wnd = TCP_SEND_BUFFER_SIZE * 2;
-    V2 printf("[\e[32mInfo\e[0m] Init finished, snd_sqn = %d, snd_iss = %d\n", snd_sqn, snd_iss);
-}
-
-void freeConnectionBuffer(TCB &c)
-{
-    delete c.sendBuffer;
-}
+    }
 
 //TODO:needs mutex
 std::map<uint16_t, vector<std::shared_ptr<TCB>>> connections;
@@ -548,19 +603,22 @@ int TCPOnIPCallback(const void *buf, int len)
         V2 printf("[\e[32mInfo\e[0m] Drop packet since it's not TCP\n");
     }
     auto key = tcp_id_t(ntohs(header_tcp->srcPort), header_ip->src_addr, header_ip->dst_addr, ntohs(header_tcp->dstPort));
-    std::swap(key.dstIP,key.srcIP);
-    std::swap(key.dstPort,key.srcPort);
+    std::swap(key.dstIP, key.srcIP);
+    std::swap(key.dstPort, key.srcPort);
     V2 printf("[\e[32mInfo\e[0m] Q (%d,%d,%x,%x)\n",key.srcPort,key.dstPort,key.srcIP,key.dstIP);
     if (!connections.count(key.srcPort))
     {
-        printf("[Err] TCP connection does not exist\n");
+        printf("[Err] TCP connection does not exist, port = %d\n", key.srcPort);
         return -1;
     } 
     std::shared_ptr<TCB> p;
     for (auto x:connections[key.srcPort]) {
-       if (x->socket == key) {
-           p = x;
-       } 
+        V2 printf("[Info] %x,%x,%x,%x\n", x->socket.dstIP, x->socket.dstPort, x->socket.srcPort, x->socket.srcIP); 
+        V2 printf("[Info] %x,%x,%x,%x\n", key.dstIP, key.dstPort, key.srcPort, key.srcIP); 
+        if (x->socket == key)
+        {
+            p = x;
+        }
     }
     if (!p) {
         for (auto t:connections[key.srcPort]) {
@@ -568,6 +626,9 @@ int TCPOnIPCallback(const void *buf, int len)
             if (x.socket.dstIP == 0) {
                 x.socket.dstIP = key.dstIP;
                 x.socket.dstPort = key.dstPort;
+                if (x.socket.srcIP == 0) {
+                    x.socket.srcIP = ntohl(getAnyIP()); 
+                }
                 V1 printf("[\e[32mInfo\e[0m] Connection setup!\n");
                 p=t;
             }
@@ -585,16 +646,16 @@ int TCPOnIPCallback(const void *buf, int len)
 
 vector<std::future<int>> initTcpService(int cnt)
 {
-    static bool init = false;
-    if (!init) {
-        init = true;
-        srand(time(0));
-        setIPPacketReceiveCallback(TCPOnIPCallback);
-        return initRouteService(cnt);
-    }
-    return {}; 
+    srand(time(0));
+    setIPPacketReceiveCallback(TCPOnIPCallback);
+    return initRouteService(cnt);
 }
 
+std::shared_ptr<TCB> registerTCB(uint16_t port, std::shared_ptr<TCB> p) {
+    printf("[Info] registerTCB at port %d\n", port);
+    connections[port].push_back(p);
+    return connections[port].back();
+}
 //Just for debug.
 void testTCPSendPacket(){
     tcp_id_t socket;
@@ -623,8 +684,7 @@ void testTCPEchoServer() {
     socket.srcIP = 0x0a640101;
     socket.srcPort = 123;
     socket.dstPort = 0;
-    connections[socket.srcPort].push_back(std::make_shared<TCB>()); 
-    TCB &c=*connections[socket.srcPort][0]; 
+    TCB &c=*registerTCB(socket.srcPort, make_shared<TCB>());
     c.socket=socket;
     V1 printf("[\e[32mInfo\e[0m] Server should be ns1.\n");
     auto r = initTcpService(100); 
@@ -645,6 +705,7 @@ void testTCPEchoServer() {
     c.sendCloseSignal();
 }
 
+
 void testTCPEchoClient() {
     socketCount = 1;
     auto r = initTcpService(100); 
@@ -653,8 +714,7 @@ void testTCPEchoClient() {
     socket.dstIP = 0x0a640101;
     socket.dstPort = 123;
     socket.srcPort = 456;
-    connections[socket.srcPort].push_back(std::make_shared<TCB>()); 
-    TCB &c=*connections[socket.srcPort][0]; 
+    TCB &c=*registerTCB(socket.srcPort, make_shared<TCB>());
     c.socket=socket;
     c.init();
     const char *buf = "0123456789";
@@ -671,7 +731,6 @@ void testTCPEchoClient() {
     c.sendCloseSignal();
 }
 
-/*
 enum struct SocketState {
     IDLE, BIND, CONNECTED 
 };
@@ -682,45 +741,52 @@ struct socket_t {
 //socket control block
 struct scb {
     SocketState state; 
-    socket_t src, dst; 
+    socket_t soc; 
     std::shared_ptr<TCB> c;
 };
 
+//TODO:Implement it
 std::mutex mapSocketMutex; 
-std::map<int, scb> map; 
+std::map<int, scb> socketMap; 
 
 int getNewUserSocket() {
-    return rand();
+    auto t = rand();
+    socketMap[t] = scb(); 
+    return t;
 }
 int __wrap_socket(int domain, int type, int protocol) {
     if (socketCount.fetch_add(1) == 0) {
-        initTcpService(TEST_MST_CNT);
+        static vector<std::future<int>> v;
+        auto r = initTcpService(TEST_MSG_CNT);
+        for (auto &x : r) v.push_back(std::move(x)); 
+        //Wait to build DV
+        std::this_thread::sleep_for(std::chrono::seconds(3));
     }
+    V1 printf("[\e[32mInfo\e[0m] __wrap_socket.\n");
     bool support = (domain == AF_INET) && ((type & SOCK_STREAM) == SOCK_STREAM) && 
         (!protocol || protocol == IPPROTO_TCP);
     if (!support) {
         return __real_socket(domain, type, protocol);
     }
-    int t = getNewUserSocket(); 
-    map[t] = scb(); 
-    return t; 
+    return getNewUserSocket(); 
 }
 
 std::optional<scb*> getSocket(int x) {
     std::lock_guard<std::mutex> lock(mapSocketMutex);
-    return map.count(x) ? std::optional<scb*>(&map[x]) : std::nullopt;
+    return socketMap.count(x) ? std::optional<scb*>(&socketMap[x]) : std::nullopt;
 }
 
 int __wrap_bind(int socket, const struct sockaddr *address, socklen_t address_len) {
     auto s = getSocket(socket); 
     if (s) {
+        printf("[Info] Bind.\n");
         if (((sockaddr_in*)address)->sin_family != AF_INET) {
             printf("[Err] bind to a non IPV4 addr.\n");
             return -1;
         }
         auto *p = (sockaddr_in*)address;
-        s.value()->src.ip = p->sin_addr.s_addr; 
-        s.value()->src.port = ntohs(p->sin_port);
+        s.value()->soc.ip = p->sin_addr.s_addr; 
+        s.value()->soc.port = ntohs(p->sin_port);
         return 0;
     } else {
         return __real_bind(socket, address, address_len);
@@ -735,27 +801,81 @@ int __wrap_listen(int socket, int backlog) {
     s.value()->state = SocketState::BIND;
     return 0; 
 }
-int __wrap_connect(int socket, const struct sockaddr *address, socklen_t address_len) {
-    auto s = getSocket(socket); 
-    if (!socket) return __real_connect(socket, address, address_len);
-    s.value()->c = std::make_shared<TCB>(); 
-    auto &c = s.value()->c;
-}
-
 int __wrap_accept(int socket, struct sockaddr *address, socklen_t *address_len) {
-
+    int t = getNewUserSocket(); 
+    socketMap[t] = scb(); 
+    auto s = getSocket(socket); 
+    if (!s) {
+        return __real_accept(socket, address, address_len);
+    }
+    auto &c = (socketMap[t].c); 
+    c=registerTCB(s.value()->soc.port, make_shared<TCB>());
+    c->socket.srcPort = s.value()->soc.port;
+    c->init();
+    c->startListen();
+    c->waitUntil(TCPState::ESTAB);
+    auto *p = (sockaddr_in*)address;
+    p->sin_family = AF_INET;
+    p->sin_addr.s_addr = ntohl(c->socket.dstIP);
+    p->sin_port = ntohs(c->socket.dstPort);
+    *address_len = sizeof(struct sockaddr_in);
+    return t;
 }
 
 ssize_t __wrap_write(int fildes, const void *buf, size_t nbyte) {
-
+    auto t = getSocket(fildes);
+    if (!t) return __real_write(fildes, buf, nbyte);
+    V1 printf("[Info] write fd = %d\n", fildes);
+    auto r = t.value()->c->sendPacket(buf, nbyte);
+    return r;
 }
 
 ssize_t __wrap_read(int fildes, void *buf, size_t nbyte) {
-
+    auto t = getSocket(fildes);
+    if (!t) return __real_read(fildes, buf, nbyte);
+    V1 printf("[Info] read fd = %d, len = %lu\n", fildes, nbyte);
+    auto r = t.value()->c->readData((char*)buf, nbyte);
+    V1 printf("[Info] before get.\n");
+    auto res = r.get();
+    V1 printf("[Info] get.\n");
+    return res;
 }
 
 int __wrap_close(int fildes) {
     auto s = getSocket(fildes); 
+    if (!s) __real_close(fildes);
     s.value()->c->sendCloseSignal();
+    s.value()->c->waitUntil(TCPState::CLOSED);
+    return 0;
 }
-*/
+
+inline static uint16_t genPort() {
+    return rand() % 30000u + 32800u;
+}
+
+uint32_t getAnyIP(){
+    auto s = getLegalPortName()[0];
+    uint32_t t;
+    getIPAddress(s.c_str(), (u_char*)&t);
+    return t;
+}
+
+int __wrap_connect(int socket, const struct sockaddr *address, socklen_t address_len) {
+    auto s = getSocket(socket); 
+    if (!s) return __real_connect(socket, address, address_len);
+    auto &srcPort = s.value()->soc.port;
+    if (srcPort == 0) srcPort = genPort(); 
+    auto c=registerTCB(s.value()->soc.port, make_shared<TCB>());
+    auto *p = (sockaddr_in *)address;
+    c->socket.dstIP = ntohl(p->sin_addr.s_addr);
+    c->socket.dstPort = ntohs(p->sin_port);
+    c->socket.srcIP = s.value()->soc.ip;
+    if (c->socket.srcIP == 0) c->socket.srcIP = ntohl(getAnyIP()); 
+    c->socket.srcPort = s.value()->soc.port;
+    c->startConnection();
+    c->waitUntil(TCPState::ESTAB);
+    c->mutex.lock(); 
+    c->mutex.unlock();
+    s.value()->c = c;
+    return 0;
+}

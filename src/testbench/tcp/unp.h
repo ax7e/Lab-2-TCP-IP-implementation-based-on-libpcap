@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <zconf.h>
+#include "src/tcp/socket.h"
 
 #define MAXLINE 4096
 
