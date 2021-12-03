@@ -33,7 +33,6 @@ int __wrap_getaddrinfo(const char *node, const char *service, const struct addri
                 addr->sin_addr.s_addr = 0;
             }
             addr->sin_port = service ? htons(atoi(service)) : 0;
-            printf("%x\n", addr->sin_port);
             ret->ai_next = nullptr;
             ret->ai_flags = 0;
             ret->ai_family = AF_INET;

@@ -14,11 +14,12 @@ void str_echo(int sockfd, int sleep_) {
   while ((n = read(sockfd, buf, MAXLINE)) > 0) {
     writen(sockfd, buf, n);
     acc += n;
-    printf("%zu ", acc);
+    printf("\e[31m%zu\e[0m ", acc);
     fflush(stdout);
     if (sleep_) {
       sleep(1);
     }
+    if (acc>18000) exit(-1);
   }
   printf("all: %zu\n", acc);
   if (n < 0 && errno == EINTR) {

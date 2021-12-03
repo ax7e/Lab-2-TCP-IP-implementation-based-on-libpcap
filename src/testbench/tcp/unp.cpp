@@ -47,6 +47,7 @@ writen(int fd, const void* buff, size_t nbytes) {
     int nwritten = write(fd, ptr, nleft);
 
     if (nwritten == 0 || (nwritten < 0 && errno != EINTR)) {
+      printf("Case at %d\n", nwritten);
       return -1;
     }
 

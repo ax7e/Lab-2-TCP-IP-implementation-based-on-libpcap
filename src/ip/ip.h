@@ -12,6 +12,8 @@ in an Ethernet II frame .
 #include "ip_route.h"
 #define IP_HEADER_LEN 20
 #define PREMBLE_LEN 10
+#define V0 if(verbose>=0)
+#define VM1 if(verbose>=-1)
 #define V1 if(verbose>=1)
 #define V2 if(verbose>=2)
 extern int verbose;

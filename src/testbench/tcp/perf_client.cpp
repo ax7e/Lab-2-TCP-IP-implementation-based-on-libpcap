@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
     hints.ai_family = AF_INET ;
     hints.ai_protocol = IPPROTO_TCP;
     hints.ai_flags = 0;
-    if (__real_getaddrinfo(argv[1], "10086", &hints, &servaddr) != 0)
+    if (getaddrinfo(argv[1], "10086", &hints, &servaddr) != 0)
     {
       printf("[Err] Failed getaddrinfo!\n");
       exit(-1); 

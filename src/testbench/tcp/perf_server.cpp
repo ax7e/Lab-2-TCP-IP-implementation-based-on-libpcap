@@ -37,12 +37,6 @@ int main(int argc, char *argv[]) {
   servaddr.sin_port = htons(10086);
 
   Bind(listenfd, (struct sockaddr *) &servaddr, sizeof(servaddr));
-  optval = 1;
-  rv = setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR,
-                      (const void *) &optval, sizeof(int));
-  if (rv < 0) {
-    printf("%s\n", strerror(errno));
-  }
   Listen(listenfd, SOMAXCONN);
   
   // for (;;) {

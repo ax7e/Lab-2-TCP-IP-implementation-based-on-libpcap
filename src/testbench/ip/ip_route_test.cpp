@@ -5,5 +5,6 @@
 using std::string; 
 
 int main(int argc, char *argv[]) {
+    socketCount = 1;
     auto r = initRouteService(3000); 
 }

@@ -7,13 +7,9 @@
 #include "unp.h"
 #include "src/tcp/socket.h"
 
-const char* message = "hello\n"
-"world\n\n\n"
-"Looooooooooooooooooooooooooooooooooooooooooooong\n"
-"what\na\nt\ne\nr\nr\ni\nb\nl\ne\n"
-"\n\n\n";
+const char* message = "hello\n\n\n";
 
-#define MSG_LEN 15000
+#define MSG_LEN 150
 char message_buf[MSG_LEN];
 
 void populate_buf() {
@@ -50,7 +46,6 @@ void cli_client(const char* addr, int sleep_) {
   FILE* fp;
 
   sockfd = Socket(AF_INET, SOCK_STREAM, 0);
-  printf("[Info] Socket created.\n"); 
   bzero(&servaddr, sizeof(servaddr));
   servaddr.sin_family = AF_INET;
   servaddr.sin_port = htons(10086);
@@ -71,14 +66,14 @@ void cli_client(const char* addr, int sleep_) {
 int main(int argc, char *argv[]) {
   int loop;
   
-  printf("[Info] Hello world.\n"); 
+  const char *s = "10.100.1.1";
+  const char *gg=argv[1];
   if (argc != 2) {
-    printf("usage: %s <IPaddress>\n", argv[0]);
-    return -1;
+    gg=s;
   }
   
   for (loop = 0; loop < 3; loop++) {
-    cli_client(argv[1], loop==0);
+    cli_client(gg, loop==0);
     printf("loop #%d ok.\n", loop + 1);
   }
 

@@ -153,10 +153,8 @@ int addDevice(string device) {
         return -1;
     }
 
-    printf("[\e[32mInfo\e[0m] Activation succeed!\n");
     getIDCache()[device] = (Info){ptr,nullptr,0};
     int res = getMACAddress(device.c_str(), getIDCache()[device].mac);
-    printf("[\e[32mInfo\e[0m] Successfully fetched MAC address!\n");
     if (res != 0) {
         printf("[Error] Failed to get MAC address\n");
     }
@@ -166,7 +164,6 @@ int addDevice(string device) {
 std::future<int> activateListen(string id, int cnt = 0) {
     pcap_t* handle = getIDCache()[id].handle;
     auto callback = getIDCache()[id].callback;
-    printf("[\e[32mInfo\e[0m] Listen thread of port %s begins. \n", id.c_str()); 
     return std::async([=](int cnt){
         int res; 
         do {

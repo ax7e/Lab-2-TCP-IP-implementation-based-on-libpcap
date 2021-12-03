@@ -28,7 +28,7 @@ mutex distVectorMutex;
 typedef int (*IPPacketReceiveCallback)(const void *buf, int len);
 IPPacketReceiveCallback ipReceiveCallback = nullptr;
 
-int verbose=0; 
+int verbose=-4; 
 
 bool operator<(const RouteTableEntry &lhs, const RouteTableEntry &rhs) {
     return lhs.dest.s_addr == rhs.dest.s_addr ? lhs.mask.s_addr < rhs.mask.s_addr : lhs.dest.s_addr < rhs.dest.s_addr;
